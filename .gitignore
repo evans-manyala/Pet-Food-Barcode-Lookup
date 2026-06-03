@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+#.env.*
+.env copy
+*.env
+
+# OS / editor cruft
+.DS_Store
+
+# Build / cache artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv*/
+venv/
+dist/
+release.tar.gz
+
+# Large generated archives that aren't useful to the assistant
+*.zip

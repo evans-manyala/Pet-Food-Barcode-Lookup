@@ -1,0 +1,41 @@
+"""
+config.py – Centralised settings loaded from .env.
+"""
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ── Gemini via Vertex AI (uses GCP billing + ADC) ──────────────────────
+    google_cloud_project: str = ""
+    google_cloud_location: str = "us-central1"
+    gemini_model: str = "gemini-2.5-flash"
+
+    # ── OpenRouter (for OpenAI-compatible embeddings → Pinecone) ──────────
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    embedding_model: str = "openai/text-embedding-3-small"
+
+    # ── Redis ──────────────────────────────────────────────────────────────
+    redis_url: str = "redis://localhost:6379/0"
+    redis_ttl: int = 86_400  # 24 h
+
+    # ── Pinecone ───────────────────────────────────────────────────────────
+    pinecone_api_key: str = ""
+    pinecone_index_name: str = "pet-food-products"
+    pinecone_dimension: int = 1536  # matches text-embedding-3-small
+
+    # ── App ────────────────────────────────────────────────────────────────
+    log_level: str = "INFO"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()

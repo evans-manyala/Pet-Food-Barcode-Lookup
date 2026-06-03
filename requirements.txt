@@ -1,0 +1,10 @@
+google-cloud-aiplatform>=1.60.0   # Vertex AI SDK — includes vertexai + ADC support
+google-auth>=2.29.0               # ADC token refresh
+openai>=1.30.0                    # OpenRouter-compatible client (embeddings only)
+redis>=5.0.0
+pinecone>=3.2.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+rich>=13.7.0
+requests>=2.31.0
