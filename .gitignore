@@ -1,6 +1,7 @@
 # Environment / secrets
 .env
-#.env.*
+.env.*
+.env-*
 .env copy
 *.env
 
@@ -15,6 +16,7 @@ __pycache__/
 venv/
 dist/
 release.tar.gz
+.cursorignore
 
 # Large generated archives that aren't useful to the assistant
 *.zip
