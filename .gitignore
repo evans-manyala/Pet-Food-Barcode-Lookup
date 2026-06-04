@@ -17,6 +17,7 @@ venv/
 dist/
 release.tar.gz
 .cursorignore
+.cache/
 
 # Large generated archives that aren't useful to the assistant
 *.zip
