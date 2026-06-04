@@ -3,12 +3,17 @@ barcode_validator.py – Validates common 1-D barcodes used on retail products.
 
 Supported formats
 -----------------
-  EAN-13  (13 digits)  – most common globally
-  UPC-A   (12 digits)  – North-America standard
-  EAN-8   ( 8 digits)  – short-space packaging
+  EAN-13 / GTIN-13  (13 digits)
+  UPC-A  / GTIN-12  (12 digits)
+  EAN-8  / GTIN-8   (8 digits)
+
+Also supports common UPC-A display issue:
+  11 digits where the leading UPC number-system digit 0 was omitted.
+  Example: 52742068435 -> normalized to 052742068435
 """
 
 from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -16,8 +21,8 @@ from enum import Enum
 
 class BarcodeFormat(str, Enum):
     EAN13 = "EAN-13"
-    UPCA  = "UPC-A"
-    EAN8  = "EAN-8"
+    UPCA = "UPC-A"
+    EAN8 = "EAN-8"
     UNKNOWN = "Unknown"
 
 
@@ -34,22 +39,6 @@ class BarcodeValidationResult:
         return f"✘  {self.barcode}  – {self.error}"
 
 
-# ─── Internal helpers ────────────────────────────────────────────────────────
-
-def _gs1_checksum_valid(digits: str) -> bool:
-    """
-    GS-1 check digit algorithm used by EAN-13, UPC-A, and EAN-8.
-
-    For a string of N digits the check digit is the last one.
-    Weights alternate 1 and 3 starting from the *left* for EAN-13/UPC-A
-    and identically for EAN-8.
-    """
-    weights = [1 if i % 2 == 0 else 3 for i in range(len(digits) - 1)]
-    total = sum(int(d) * w for d, w in zip(digits[:-1], weights))
-    check = (10 - (total % 10)) % 10
-    return check == int(digits[-1])
-
-
 def _detect_format(digits: str) -> BarcodeFormat:
     if len(digits) == 13:
         return BarcodeFormat.EAN13
@@ -60,54 +49,69 @@ def _detect_format(digits: str) -> BarcodeFormat:
     return BarcodeFormat.UNKNOWN
 
 
-# ─── Public API ──────────────────────────────────────────────────────────────
+def _gs1_check_digit(data_digits: str) -> int:
+    """
+    Correct GS1/GTIN check digit calculation for GTIN-8, GTIN-12/UPC-A,
+    and GTIN-13/EAN-13.
+
+    Exclude the final check digit, start from the rightmost data digit, and
+    apply weights 3,1,3,1... moving left.
+    """
+    total = 0
+    for position_from_right, ch in enumerate(reversed(data_digits), start=1):
+        weight = 3 if position_from_right % 2 == 1 else 1
+        total += int(ch) * weight
+    return (10 - (total % 10)) % 10
+
+
+def _gs1_checksum_valid(digits: str) -> bool:
+    if len(digits) < 2 or not digits.isdigit():
+        return False
+    return _gs1_check_digit(digits[:-1]) == int(digits[-1])
+
+
+def _normalise_candidates(cleaned: str) -> list[str]:
+    candidates = [cleaned]
+    if len(cleaned) == 11:
+        candidates.append("0" + cleaned)
+    return list(dict.fromkeys(candidates))
+
 
 def validate_barcode(raw: str) -> BarcodeValidationResult:
-    """
-    Validate a barcode string.
-
-    Parameters
-    ----------
-    raw : str
-        The raw barcode string typed or scanned by the user.
-        Spaces and hyphens are stripped automatically.
-
-    Returns
-    -------
-    BarcodeValidationResult
-    """
-    cleaned = re.sub(r"[\s\-]", "", raw.strip())
+    cleaned = re.sub(r"[\s\-]", "", str(raw or "").strip())
 
     if not cleaned:
-        return BarcodeValidationResult(
-            is_valid=False, barcode=raw,
-            fmt=BarcodeFormat.UNKNOWN,
-            error="Barcode is empty."
-        )
+        return BarcodeValidationResult(False, str(raw), BarcodeFormat.UNKNOWN, "Barcode is empty.")
 
     if not cleaned.isdigit():
         return BarcodeValidationResult(
-            is_valid=False, barcode=cleaned,
-            fmt=BarcodeFormat.UNKNOWN,
-            error=f"Barcode contains non-digit characters: '{cleaned}'"
+            False,
+            cleaned,
+            BarcodeFormat.UNKNOWN,
+            f"Barcode contains non-digit characters: '{cleaned}'",
         )
+
+    for candidate in _normalise_candidates(cleaned):
+        fmt = _detect_format(candidate)
+        if fmt is not BarcodeFormat.UNKNOWN and _gs1_checksum_valid(candidate):
+            return BarcodeValidationResult(True, candidate, fmt)
 
     fmt = _detect_format(cleaned)
     if fmt is BarcodeFormat.UNKNOWN:
-        return BarcodeValidationResult(
-            is_valid=False, barcode=cleaned,
-            fmt=fmt,
-            error=(
-                f"Unsupported barcode length ({len(cleaned)} digits). "
-                "Expected 8 (EAN-8), 12 (UPC-A), or 13 (EAN-13)."
+        if len(cleaned) == 11:
+            return BarcodeValidationResult(
+                False,
+                cleaned,
+                BarcodeFormat.UNKNOWN,
+                "Unsupported 11-digit barcode. Tried normalizing as UPC-A with leading zero "
+                f"0{cleaned}, but the check digit did not pass.",
             )
-        )
-
-    if not _gs1_checksum_valid(cleaned):
         return BarcodeValidationResult(
-            is_valid=False, barcode=cleaned,
-            fmt=fmt,
-            error="Invalid check digit – barcode may be mis-typed or corrupted."
+            False,
+            cleaned,
+            BarcodeFormat.UNKNOWN,
+            f"Unsupported barcode length ({len(cleaned)} digits). Expected 8 (EAN-8), "
+            "12 (UPC-A), 13 (EAN-13), or 11 digits when a UPC-A leading zero was omitted.",
         )
 
-    return BarcodeValidationResult(is_valid=True, barcode=cleaned, fmt=fmt)
+    return BarcodeValidationResult(False, cleaned, fmt, "Invalid check digit – barcode may be mis-typed or corrupted.")

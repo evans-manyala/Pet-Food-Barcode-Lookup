@@ -1,30 +1,25 @@
 """
 pinecone_store.py – Pinecone vector database integration.
 
-Embedding source
-----------------
-  OpenAI text-embedding-3-small (1 536 dims) accessed via OpenRouter.
-  OpenRouter is OpenAI-SDK-compatible — only the base_url changes.
-
 Storage strategy
 ----------------
-  • Vector ID     = barcode string (exact lookup in O(1))
-  • Embedding     = product_name + brand + nutritional summary
-  • Metadata      = full ProductInfo serialised as JSON string
-  • Namespace     = "pet-food"
+  • Vector ID = exact barcode string
+  • Metadata  = full ProductInfo JSON payload
+  • Namespace = configurable via PINECONE_NAMESPACE
 
-Lookup order (called from main.py)
--------------------
-  1. fetch_by_barcode()  – exact ID match (fast, no embedding needed)
-  2. semantic_search()   – cosine similarity fallback (rare, last resort)
+Safety note
+-----------
+ProductInfo now includes barcode_verified/identity_confidence. main.py will not
+trust or display old Pinecone records unless they are verified.
 """
 
 from __future__ import annotations
+
 import json
 import logging
 from typing import Optional
 
-from openai import OpenAI as _OAI          # OpenRouter is OAI-compatible
+from openai import OpenAI as _OAI
 from pinecone import Pinecone, ServerlessSpec
 
 from .config import get_settings
@@ -32,26 +27,26 @@ from .models import ProductInfo
 
 log = logging.getLogger(__name__)
 
-_EMBED_MODEL  = "openai/text-embedding-3-small"   # routed via OpenRouter
-_EMBED_DIM    = 1536
-_NAMESPACE    = "pet-food"
-_TOP_K        = 3
+_TOP_K = 3
 
 
 def _build_embed_text(product: ProductInfo) -> str:
-    """Concatenate key fields into a single string for embedding."""
     parts = [
         product.product_name,
         product.brand or "",
         product.target_animal or "",
         product.barcode,
+        "barcode_verified" if product.barcode_verified else "barcode_unverified",
+        product.identity_confidence,
     ]
     if product.nutritional_info:
         ni = product.nutritional_info
         parts.append(
             f"protein {ni.crude_protein_min} fat {ni.crude_fat_min} "
-            f"fiber {ni.crude_fiber_max} moisture {ni.moisture_max}"
+            f"fiber {ni.crude_fiber_max} moisture {ni.moisture_max} ash {ni.ash_max}"
         )
+    if product.barcode_evidence:
+        parts.append(product.barcode_evidence)
     return " | ".join(p for p in parts if p)
 
 
@@ -61,6 +56,9 @@ class PineconeStore:
     def __init__(self) -> None:
         cfg = get_settings()
         self._available = False
+        self._namespace = cfg.pinecone_namespace
+        self._embed_model = cfg.embedding_model
+        self._embed_dim = cfg.pinecone_dimension
 
         if not cfg.pinecone_api_key:
             log.warning("PINECONE_API_KEY not set – Pinecone disabled.")
@@ -70,8 +68,7 @@ class PineconeStore:
             return
 
         try:
-            # ── Pinecone client ───────────────────────────────────────────
-            self._pc       = Pinecone(api_key=cfg.pinecone_api_key)
+            self._pc = Pinecone(api_key=cfg.pinecone_api_key)
             self._idx_name = cfg.pinecone_index_name
 
             existing = [i.name for i in self._pc.list_indexes()]
@@ -79,44 +76,54 @@ class PineconeStore:
                 log.info("Creating Pinecone index '%s' …", self._idx_name)
                 self._pc.create_index(
                     name=self._idx_name,
-                    dimension=_EMBED_DIM,
+                    dimension=self._embed_dim,
                     metric="cosine",
                     spec=ServerlessSpec(cloud="aws", region="us-east-1"),
                 )
 
             self._idx = self._pc.Index(self._idx_name)
 
-            # ── OpenRouter client (for embeddings only) ───────────────────
             self._oai = _OAI(
                 api_key=cfg.openrouter_api_key,
                 base_url=cfg.openrouter_base_url,
             )
 
             log.info(
-                "Pinecone ready (index='%s') | Embeddings via OpenRouter → %s",
-                self._idx_name, _EMBED_MODEL,
+                "Pinecone ready (index='%s', namespace='%s') | embeddings=%s",
+                self._idx_name,
+                self._namespace,
+                self._embed_model,
             )
             self._available = True
 
         except Exception as exc:
             log.warning("Pinecone/OpenRouter initialisation failed: %s", exc)
 
-    # ── Helpers ───────────────────────────────────────────────────────────
-
     @property
     def is_available(self) -> bool:
         return self._available
 
     def _embed(self, text: str) -> list[float]:
-        """Generate a 1 536-dim embedding via OpenRouter → OpenAI."""
-        resp = self._oai.embeddings.create(model=_EMBED_MODEL, input=text)
-        return resp.data[0].embedding
+        resp = self._oai.embeddings.create(model=self._embed_model, input=text)
+        vector = resp.data[0].embedding
+        if len(vector) != self._embed_dim:
+            raise ValueError(
+                f"Embedding dimension mismatch: got {len(vector)}, expected {self._embed_dim}"
+            )
+        return vector
 
     def _to_metadata(self, product: ProductInfo) -> dict:
-        raw = json.dumps(product.model_dump())
-        if len(raw) > 39_000:          # Pinecone metadata cap ≈ 40 KB
+        raw = product.model_dump_json()
+        if len(raw) > 39_000:
             raw = raw[:39_000]
-        return {"barcode": product.barcode, "payload": raw}
+        return {
+            "barcode": product.barcode,
+            "barcode_verified": product.barcode_verified,
+            "identity_confidence": product.identity_confidence,
+            "product_name": product.product_name,
+            "brand": product.brand or "",
+            "payload": raw,
+        }
 
     def _from_metadata(self, metadata: dict) -> Optional[ProductInfo]:
         try:
@@ -125,25 +132,23 @@ class PineconeStore:
             log.warning("Failed to deserialise Pinecone metadata: %s", exc)
             return None
 
-    # ── Public API ────────────────────────────────────────────────────────
-
     def upsert(self, product: ProductInfo) -> bool:
-        """Store or update a product vector. Returns True on success."""
+        """Store/update only a ProductInfo object. main.py decides whether it is safe."""
         if not self._available:
             return False
         try:
-            text   = _build_embed_text(product)
+            text = _build_embed_text(product)
             vector = self._embed(text)
-            meta   = self._to_metadata(product)
+            meta = self._to_metadata(product)
             self._idx.upsert(
                 vectors=[{
-                    "id":       product.barcode,
-                    "values":   vector,
+                    "id": product.barcode,
+                    "values": vector,
                     "metadata": meta,
                 }],
-                namespace=_NAMESPACE,
+                namespace=self._namespace,
             )
-            log.info("Pinecone UPSERT barcode=%s", product.barcode)
+            log.info("Pinecone UPSERT barcode=%s namespace=%s", product.barcode, self._namespace)
             return True
         except Exception as exc:
             log.warning("Pinecone UPSERT error: %s", exc)
@@ -154,24 +159,35 @@ class PineconeStore:
         if not self._available:
             return None
         try:
-            result  = self._idx.fetch(ids=[barcode], namespace=_NAMESPACE)
+            result = self._idx.fetch(ids=[barcode], namespace=self._namespace)
             vectors = result.get("vectors") or {}
             if barcode not in vectors:
-                log.debug("Pinecone exact MISS for barcode=%s", barcode)
+                log.debug("Pinecone exact MISS for barcode=%s namespace=%s", barcode, self._namespace)
                 return None
             product = self._from_metadata(vectors[barcode].get("metadata", {}))
             if product:
-                log.info("Pinecone exact HIT for barcode=%s", barcode)
+                log.info("Pinecone exact HIT for barcode=%s namespace=%s", barcode, self._namespace)
             return product
         except Exception as exc:
             log.warning("Pinecone FETCH error: %s", exc)
             return None
 
+    def delete(self, barcode: str) -> bool:
+        """Manually remove a product from Pinecone by barcode."""
+        if not self._available:
+            return False
+        try:
+            self._idx.delete(ids=[barcode], namespace=self._namespace)
+            log.info("Pinecone DELETE barcode=%s namespace=%s", barcode, self._namespace)
+            return True
+        except Exception as exc:
+            log.warning("Pinecone DELETE error: %s", exc)
+            return False
+
     def semantic_search(self, query: str, top_k: int = _TOP_K) -> list[ProductInfo]:
         """
-        Cosine-similarity search.  Used as a last-resort fallback when the
-        exact barcode is unknown (e.g. barcode damaged / only product name
-        available).
+        Cosine similarity search. Use only as a manual/debug fallback because exact
+        barcode lookup is safer for product identity.
         """
         if not self._available:
             return []
@@ -181,9 +197,9 @@ class PineconeStore:
                 vector=vec,
                 top_k=top_k,
                 include_metadata=True,
-                namespace=_NAMESPACE,
+                namespace=self._namespace,
             )
-            products = []
+            products: list[ProductInfo] = []
             for match in res.get("matches", []):
                 p = self._from_metadata(match.get("metadata", {}))
                 if p:

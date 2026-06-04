@@ -4,7 +4,7 @@ models.py – Shared Pydantic data models.
 
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel, HttpUrl, Field
+from pydantic import BaseModel, Field
 
 
 class NutritionalInfo(BaseModel):
@@ -32,9 +32,19 @@ class ProductInfo(BaseModel):
     barcode: str
     product_name: str
     brand: Optional[str] = None
-    target_animal: Optional[str] = None   # "Dog", "Cat", "Dog & Cat"
+    target_animal: Optional[str] = None       # "Dog", "Cat", "Dog & Cat"
     manufacturer_url: Optional[str] = None
     image_url: Optional[str] = None
     nutritional_info: Optional[NutritionalInfo] = None
     hk_retailers: list[RetailerListing] = Field(default_factory=list)
-    raw_llm_response: Optional[str] = None  # kept for debugging
+
+    # ── Verification metadata (added in v2) ───────────────────────────────
+    barcode_verified: bool = False
+    identity_confidence: str = "low"          # "high" | "medium" | "low"
+    evidence_urls: list[str] = Field(default_factory=list)
+    barcode_evidence: Optional[str] = None    # short snippet linking barcode to product
+    warnings: list[str] = Field(default_factory=list)
+
+    # ── Debug ─────────────────────────────────────────────────────────────
+    raw_llm_response: Optional[str] = None
+    

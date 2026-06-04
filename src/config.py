@@ -2,8 +2,8 @@
 config.py – Centralised settings loaded from .env.
 """
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     # ── Pinecone ───────────────────────────────────────────────────────────
     pinecone_api_key: str = ""
     pinecone_index_name: str = "pet-food-products"
-    pinecone_dimension: int = 1536  # matches text-embedding-3-small
+    pinecone_dimension: int = 1536
+    pinecone_namespace: str = "pet-food"
 
     # ── App ────────────────────────────────────────────────────────────────
     log_level: str = "INFO"
