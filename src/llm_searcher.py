@@ -28,13 +28,23 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=True)
+
 import re
+import socket
 import time
 import html as html_lib
+from io import BytesIO
 from typing import Iterable
 from urllib.parse import urlparse, quote, urljoin
 
 import requests as http_requests
+from PIL import Image
 from google import genai
 from google.genai import types
 
@@ -449,9 +459,777 @@ def _has_hk_signal(url: str, text: str) -> bool:
     hk_markers = [
         "hk$", "hkd", "hong kong", "hongkong", "香港", "港幣",
         "加入購物車", "立即購買", "送貨", "本地配送", "滿$", "滿 hk",
+        "hktvmall", "hong kong delivery",
     ]
     return any(marker in plain for marker in hk_markers)
 
+
+
+# ─── SerpAPI budget + file cache ──────────────────────────────────────────────
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer environment setting safely."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+class SerpApiBudget:
+    """
+    Per-barcode SerpAPI budget guard.
+
+    This prevents one lookup from consuming many free-plan searches. Defaults are:
+      - 1 Google Images call
+      - 3 Google Search calls for HK retailers
+      - 4 total SerpAPI calls
+
+    Override in .env if needed:
+      SERPAPI_IMAGE_MAX_CALLS=1
+      SERPAPI_HK_MAX_CALLS=3
+      SERPAPI_TOTAL_MAX_CALLS=4
+    """
+    def __init__(self) -> None:
+        self.total_calls = 0
+        self.image_calls = 0
+        self.hk_calls = 0
+        self.max_total = _env_int("SERPAPI_TOTAL_MAX_CALLS", 4)
+        self.max_image = _env_int("SERPAPI_IMAGE_MAX_CALLS", 1)
+        self.max_hk = _env_int("SERPAPI_HK_MAX_CALLS", 3)
+
+    def can_call_image(self) -> bool:
+        return self.total_calls < self.max_total and self.image_calls < self.max_image
+
+    def can_call_hk(self) -> bool:
+        return self.total_calls < self.max_total and self.hk_calls < self.max_hk
+
+    def record_image(self) -> None:
+        self.total_calls += 1
+        self.image_calls += 1
+        log.info(
+            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
+            self.image_calls, self.max_image,
+            self.hk_calls, self.max_hk,
+            self.total_calls, self.max_total,
+        )
+
+    def record_hk(self) -> None:
+        self.total_calls += 1
+        self.hk_calls += 1
+        log.info(
+            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
+            self.image_calls, self.max_image,
+            self.hk_calls, self.max_hk,
+            self.total_calls, self.max_total,
+        )
+
+
+def _serpapi_cache_enabled() -> bool:
+    return os.getenv("SERPAPI_CACHE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def _serpapi_cache_dir() -> Path:
+    d = PROJECT_ROOT / ".cache" / "serpapi"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _serpapi_cache_key(kind: str, barcode: str, product_name: str) -> Path:
+    digits = re.sub(r"\D", "", barcode or "") or "unknown"
+    safe_name = re.sub(r"[^a-z0-9]+", "-", _normalise_match_text(product_name or ""))[:90].strip("-")
+    if not safe_name:
+        safe_name = "product"
+    return _serpapi_cache_dir() / f"{kind}_{digits}_{safe_name}.json"
+
+
+def _read_serpapi_cache(kind: str, barcode: str, product_name: str, ttl_seconds: int):
+    if not _serpapi_cache_enabled():
+        return None
+    path = _serpapi_cache_key(kind, barcode, product_name)
+    try:
+        if not path.exists():
+            return None
+        age = time.time() - path.stat().st_mtime
+        if age > ttl_seconds:
+            return None
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        log.info("SerpAPI %s cache HIT: %s", kind, path.name)
+        return data
+    except Exception as exc:
+        log.debug("SerpAPI cache read failed for %s: %s", path, exc)
+        return None
+
+
+def _write_serpapi_cache(kind: str, barcode: str, product_name: str, data) -> None:
+    if not _serpapi_cache_enabled():
+        return
+    path = _serpapi_cache_key(kind, barcode, product_name)
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        log.info("SerpAPI %s cache SET: %s", kind, path.name)
+    except Exception as exc:
+        log.debug("SerpAPI cache write failed for %s: %s", path, exc)
+
+
+def _build_image_queries(product_name: str, brand: str, barcode: str) -> list[str]:
+    """Staged image queries. Usually only the first query runs because of budget."""
+    clean_product = re.sub(r"\s+", " ", product_name or "").strip()
+    clean_brand = re.sub(r"\s+", " ", brand or "").strip()
+    clean_barcode = re.sub(r"\D", "", barcode or "")
+
+    queries = []
+    if clean_product and clean_brand:
+        queries.append(f'"{clean_product}" "{clean_brand}" product image')
+    elif clean_product:
+        queries.append(f'"{clean_product}" product image')
+
+    # Fallback only if budget allows more than one image query.
+    if clean_barcode and clean_product:
+        queries.append(f'"{clean_barcode}" "{clean_product}" image')
+
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def _build_hk_search_queries(product_name: str, brand: str, barcode: str) -> list[str]:
+    """Staged HK retailer queries based on verified product identity, not hardcoded terms."""
+    clean_product = re.sub(r"\s+", " ", product_name or "").strip()
+    clean_brand = re.sub(r"\s+", " ", brand or "").strip()
+
+    noise_filter = (
+        "-finance -stock -directory -membership -broker -insurance -hkex "
+        "-hktdc -kompass -yahoo -chamber -company -profile -linkedin"
+    )
+
+    tokens = _identity_tokens(clean_product, clean_brand)
+    generic_query_stop = _GENERIC_STOPWORDS | {"brand"}
+    distinctive = [t for t in tokens if t not in generic_query_stop][:6]
+    distinctive_query = " ".join(f'"{t}"' for t in distinctive)
+
+    queries: list[str] = []
+
+    # Product-name queries first: these are less noisy than barcode-only queries.
+    if clean_product:
+        queries.extend([
+            f'"{clean_product}" "HK$" pet food {noise_filter}',
+            f'"{clean_product}" "香港" pet food {noise_filter}',
+        ])
+
+    if clean_brand and distinctive_query:
+        queries.append(f'"{clean_brand}" {distinctive_query} "HK$" "Hong Kong" pet food {noise_filter}')
+
+    # Exact barcode fallback. Useful when HK retailers show SKU/barcode, but kept after product queries.
+    for v in _barcode_variants(barcode):
+        queries.extend([
+            f'"{v}" "HK$" pet food {noise_filter}',
+            f'"{v}" "香港" pet food {noise_filter}',
+        ])
+
+    # A broad HK pet shop fallback, only used if budget allows.
+    if clean_brand and distinctive_query:
+        queries.append(f'"{clean_brand}" {distinctive_query} "Hong Kong pet shop" {noise_filter}')
+
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+def _serpapi_google_image_candidates(
+    product_name: str,
+    brand: str,
+    barcode: str,
+    max_results: int | None = None,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> list[dict]:
+    """
+    Low-cost SerpAPI Google Images discovery layer.
+
+    Cost controls:
+    - Uses a short-lived file cache so repeated local tests do not burn calls.
+    - Runs only SERPAPI_IMAGE_MAX_CALLS queries, default 1.
+    - One Google Images call usually returns enough candidates.
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI image search skipped.")
+        return []
+
+    max_results = max_results or _env_int("SERPAPI_IMAGE_MAX_CANDIDATES", 20)
+    cache_ttl = _env_int("SERPAPI_IMAGE_CACHE_TTL", 7 * 86400)
+
+    if use_cache:
+        cached = _read_serpapi_cache("image", barcode, product_name, cache_ttl)
+        if isinstance(cached, list):
+            return cached[:max_results]
+
+    queries = _build_image_queries(product_name, brand, barcode)
+    if not queries:
+        return []
+
+    max_calls = _env_int("SERPAPI_IMAGE_MAX_CALLS", 1)
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    calls_made = 0
+
+    for query in queries:
+        if calls_made >= max_calls:
+            break
+        if budget and not budget.can_call_image():
+            log.info("SerpAPI image budget exhausted; skipping remaining image queries.")
+            break
+
+        try:
+            log.info("SerpAPI image search query: %s", query)
+            if budget:
+                budget.record_image()
+            calls_made += 1
+
+            resp = http_requests.get(
+                "https://serpapi.com/search",
+                params={
+                    "engine": "google_images",
+                    "q": query,
+                    "api_key": api_key,
+                    "hl": "en",
+                    "gl": "us",
+                    "ijn": 0,
+                    "safe": "active",
+                },
+                timeout=30,
+            )
+            log.info("SerpAPI image HTTP %s", resp.status_code)
+            if resp.status_code >= 400:
+                log.warning("SerpAPI image error body: %s", resp.text[:500])
+                continue
+
+            data = resp.json()
+            if data.get("error"):
+                log.warning("SerpAPI image API error: %s", data.get("error"))
+                continue
+
+            results = data.get("images_results") or []
+            log.info("SerpAPI image results count: %d", len(results))
+
+            for pos, item in enumerate(results, start=1):
+                image_url = item.get("original") or item.get("thumbnail")
+                source_url = item.get("link") or item.get("source_page") or item.get("original")
+                if not image_url or image_url in seen:
+                    continue
+                seen.add(image_url)
+                candidates.append({
+                    "position": pos,
+                    "image_url": image_url,
+                    "source_url": source_url,
+                    "title": item.get("title") or "",
+                    "source": item.get("source") or "",
+                    "query": query,
+                    "provider": "serpapi_google_images",
+                })
+                if len(candidates) >= max_results:
+                    break
+
+            # Early stop: if one query gave candidates, let Python/Gemini validation decide.
+            # This avoids running 3–5 extra image searches for every barcode.
+            if candidates:
+                break
+
+        except Exception as exc:
+            log.warning("SerpAPI image search failed for query=%s: %s", query, exc)
+
+    candidates = candidates[:max_results]
+    if candidates:
+        _write_serpapi_cache("image", barcode, product_name, candidates)
+    log.info("SerpAPI image candidates collected: %d", len(candidates))
+    return candidates
+
+
+def _domain_resolves(url: str) -> bool:
+    """Return True only when the candidate host resolves in DNS."""
+    try:
+        host = urlparse(url or "").netloc.lower().split(":")[0]
+        if not host:
+            return False
+        # Try both exact and without www. to handle common aliases.
+        hosts = [host]
+        if host.startswith("www."):
+            hosts.append(host[4:])
+        else:
+            hosts.append("www." + host)
+        for h in hosts:
+            try:
+                socket.getaddrinfo(h, None)
+                return True
+            except socket.gaierror:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+_NON_PRODUCT_IMAGE_MARKERS = [
+    "logo", "icon", "favicon", "seal", "seals", "certified", "certificate",
+    "certification", "trust", "secure", "security", "payment", "visa",
+    "mastercard", "paypal", "badge", "banner", "spinner", "loading",
+    "placeholder", "noimage", "no-image", "blank", "pixel", "sprite",
+    "avatar", "social", "facebook", "instagram", "whatsapp", "legitscript",
+    "trustpilot", "verified", "footer", "header", "widget", "app-store",
+    "google-play", "qrcode", "qr-code", "gift-card", "coupon", "promo",
+]
+
+_NON_PRODUCT_IMAGE_HOST_MARKERS = [
+    "legitscript", "trustpilot", "paypal", "visa", "mastercard",
+    "facebook", "instagram", "google", "gstatic", "doubleclick",
+]
+
+
+def _image_negative_asset_penalty(image_url: str, title: str = "", source_url: str = "") -> int:
+    """Generic non-product asset penalty; not a brand/domain whitelist."""
+    text = _normalise_match_text(f"{image_url} {title} {source_url}")
+    host = urlparse(image_url or "").netloc.lower()
+    penalty = 0
+    if any(marker in text for marker in _NON_PRODUCT_IMAGE_MARKERS):
+        penalty += 100
+    if any(marker in host for marker in _NON_PRODUCT_IMAGE_HOST_MARKERS):
+        penalty += 100
+    path = urlparse(image_url or "").path.lower()
+    filename = path.rstrip("/").split("/")[-1]
+    if filename in {"1.png", "0.png", "blank.png", "transparent.png", "loading.gif", "loader.gif", "spacer.gif"}:
+        penalty += 100
+    return penalty
+
+
+def _image_positive_product_score(
+    image_url: str,
+    title: str,
+    source_url: str,
+    product_name: str,
+    brand: str,
+    barcode: str,
+) -> int:
+    """Score positive evidence that an image is the actual product package."""
+    text = _normalise_match_text(f"{image_url} {title} {source_url}")
+    tokens = _identity_tokens(product_name, brand)
+    score = 0
+
+    brand_norm = _normalise_match_text(brand)
+    if brand_norm and brand_norm in text:
+        score += 25
+
+    token_hits = sum(1 for token in tokens if token in text)
+    score += token_hits * 8
+
+    digits = re.sub(r"\D", "", barcode or "")
+    if digits and digits in re.sub(r"\D", "", text):
+        score += 30
+
+    path = urlparse(image_url or "").path.lower()
+    if re.search(r"\.(jpg|jpeg|png|webp)(?:$|\?)", path):
+        score += 10
+
+    if any(x in text for x in ["product", "pack", "bag", "can", "pouch", "dry", "wet", "food", "cat", "dog"]):
+        score += 10
+
+    return score
+
+
+def _download_image_for_validation(image_url: str) -> tuple[bytes | None, str | None, str | None, tuple[int, int] | None]:
+    """Download image, verify content type and dimensions."""
+    try:
+        resp = http_requests.get(
+            image_url,
+            headers=_HTTP_HEADERS,
+            timeout=20,
+            allow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            return None, None, None, None
+        content_type = resp.headers.get("content-type", "").split(";")[0].lower()
+        if "image/" not in content_type:
+            return None, None, None, None
+        data = resp.content or b""
+        if len(data) < 8_000:
+            return None, None, None, None
+        try:
+            img = Image.open(BytesIO(data))
+            width, height = img.size
+            img.verify()
+        except Exception:
+            return None, None, None, None
+        if width < 180 or height < 180 or (width * height) < 40_000:
+            return None, None, None, None
+        return data, resp.url, content_type or "image/jpeg", (width, height)
+    except Exception:
+        return None, None, None, None
+
+
+def _is_candidate_image_valid(
+    candidate: dict,
+    product_name: str,
+    brand: str,
+    barcode: str,
+) -> tuple[bool, str | None, bytes | None, str | None, int]:
+    """
+    Validate image URL with dimensions + product-evidence scoring.
+
+    Scoring is generic and scalable:
+    - positive evidence comes from verified product tokens, barcode, source title,
+      source page, SerpAPI rank, and official/brand-looking hosts;
+    - negative evidence rejects non-product assets such as seals, logos,
+      payment badges, placeholders, icons, and social widgets.
+    """
+    image_url = str(candidate.get("image_url") or "").strip()
+    if not image_url:
+        return False, None, None, None, -999
+
+    title = str(candidate.get("title") or candidate.get("reason") or "")
+    source_url = str(candidate.get("source_url") or "")
+
+    if _image_negative_asset_penalty(image_url, title, source_url) >= 100:
+        return False, None, None, None, -999
+
+    image_bytes, final_url, mime_type, dims = _download_image_for_validation(image_url)
+    if not image_bytes or not final_url or not mime_type or not dims:
+        return False, None, None, None, -999
+
+    positive = _image_positive_product_score(final_url, title, source_url, product_name, brand, barcode)
+    penalty = _image_negative_asset_penalty(final_url, title, source_url)
+
+    # Prefer higher-ranked SerpAPI results. This makes the Google Images order
+    # useful instead of choosing a random CDN image with slightly more tokens.
+    try:
+        position = int(candidate.get("position") or 0)
+    except Exception:
+        position = 0
+    if position == 1:
+        positive += 45
+    elif 2 <= position <= 3:
+        positive += 30
+    elif 4 <= position <= 5:
+        positive += 15
+
+    # Prefer official/brand domains generically. This is not a hardcoded brand
+    # whitelist; it derives tokens from the verified brand name.
+    brand_tokens = [
+        t for t in re.findall(r"[a-z0-9]{4,}", _normalise_match_text(brand))
+        if t not in _GENERIC_STOPWORDS
+    ]
+    source_host = urlparse(source_url or "").netloc.lower().lstrip("www.")
+    image_host = urlparse(final_url or "").netloc.lower().lstrip("www.")
+
+    if any(t in source_host for t in brand_tokens):
+        positive += 50
+    if any(t in image_host for t in brand_tokens):
+        positive += 35
+
+    # Manufacturer/catalog/product media paths are useful positive signals.
+    final_url_low = final_url.lower()
+    if any(x in final_url_low for x in ["/products/", "/product/", "/media/", "/catalog/", "/shop/"]):
+        positive += 10
+
+    width, height = dims
+    if width >= 400 and height >= 400:
+        positive += 10
+
+    score = positive - penalty
+    if score < 25:
+        return False, None, None, None, score
+
+    return True, final_url, image_bytes, mime_type, score
+
+
+def _official_brand_tokens(brand: str | None) -> list[str]:
+    """
+    Dynamic brand tokens used to prefer official/manufacturer image sources.
+
+    This is generic. It does not hardcode Purina, Royal Canin, Hill's, Cindy's,
+    or any other brand. If the verified brand is "Purina Pro Plan", tokens like
+    "purina" and "plan" are derived automatically, then source/image hosts such
+    as purina.com are preferred over retailer/CDN hosts.
+    """
+    tokens = [
+        t for t in re.findall(r"[a-z0-9]{4,}", _normalise_match_text(brand or ""))
+        if t not in _GENERIC_STOPWORDS
+    ]
+    return list(dict.fromkeys(tokens))[:6]
+
+
+def _is_official_brand_image_candidate(
+    candidate: dict,
+    final_url: str,
+    product_name: str,
+    brand: str,
+) -> bool:
+    """
+    Prefer official/brand/manufacturer-looking image candidates.
+
+    The rule is evidence-based and scalable:
+      - derive brand tokens from the verified brand name;
+      - check if those tokens appear in the source-page host or image host;
+      - only use this as a preference after the image has already passed product
+        image validation.
+    """
+    brand_tokens = _official_brand_tokens(brand)
+    if not brand_tokens:
+        return False
+
+    source_url = str(candidate.get("source_url") or "")
+    source_host = urlparse(source_url).netloc.lower().lstrip("www.")
+    image_host = urlparse(final_url or "").netloc.lower().lstrip("www.")
+
+    if any(t in source_host for t in brand_tokens):
+        return True
+    if any(t in image_host for t in brand_tokens):
+        return True
+
+    return False
+
+
+def _candidate_brand_source_bonus(candidate: dict, final_url: str, brand: str) -> int:
+    """Small generic score bonus for official-looking image candidates."""
+    brand_tokens = _official_brand_tokens(brand)
+    if not brand_tokens:
+        return 0
+
+    source_url = str(candidate.get("source_url") or "")
+    source_host = urlparse(source_url).netloc.lower().lstrip("www.")
+    image_host = urlparse(final_url or "").netloc.lower().lstrip("www.")
+
+    bonus = 0
+    if any(t in source_host for t in brand_tokens):
+        bonus += 500
+    if any(t in image_host for t in brand_tokens):
+        bonus += 300
+    return bonus
+
+
+def _serpapi_hk_product_page_candidates(
+    product_name: str,
+    brand: str,
+    barcode: str,
+    max_results: int | None = None,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> tuple[list[dict], str]:
+    """
+    Low-cost SerpAPI Google Search discovery for HK buy pages.
+
+    This is candidate discovery only. Final acceptance still requires:
+      direct product page + live page opens + product match + HK signal + HKD price.
+
+    Cost controls:
+    - Uses file cache with TTL.
+    - Runs only SERPAPI_HK_MAX_CALLS queries, default 3.
+    - Stops early once enough plausible candidates are found.
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI HK URL search skipped.")
+        return [], ""
+
+    max_results = max_results or _env_int("SERPAPI_HK_MAX_CANDIDATES", 15)
+    cache_ttl = _env_int("SERPAPI_HK_CACHE_TTL", 24 * 3600)
+
+    if use_cache:
+        cached = _read_serpapi_cache("hk", barcode, product_name, cache_ttl)
+        if isinstance(cached, dict):
+            listings = cached.get("listings") or []
+            notes = cached.get("notes") or ""
+            return listings[:max_results], notes
+
+    clean_product = re.sub(r"\s+", " ", product_name or "").strip()
+    clean_brand = re.sub(r"\s+", " ", brand or "").strip()
+    product_tokens = _identity_tokens(clean_product, clean_brand)
+    barcode_variants = [re.sub(r"\D", "", v) for v in _barcode_variants(barcode)]
+
+    queries = _build_hk_search_queries(clean_product, clean_brand, barcode)
+    max_calls = _env_int("SERPAPI_HK_MAX_CALLS", 3)
+
+    blocked_hosts = [
+        "finance.yahoo.com", "hkex.com.hk", "hktdc.com", "kompass.com",
+        "chamber.org.hk", "irasia.com", "aeodirectory.com",
+        "hongkonginsurancebrokers.com", "dutchchamber.hk", "webbsite",
+        "linkedin.com", "facebook.com", "instagram.com",
+    ]
+
+    listings: list[dict] = []
+    seen: set[str] = set()
+    notes: list[str] = []
+    calls_made = 0
+
+    def add_candidate(url: str | None, title: str, snippet: str, rich=None, query: str = "") -> None:
+        if not url or url in seen:
+            return
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        if any(b in host for b in blocked_hosts):
+            return
+        if not _looks_like_product_url(url):
+            return
+
+        context = f"{title} {snippet} {json.dumps(rich or {}, ensure_ascii=False)} {url}"
+        context_norm = _normalise_match_text(context)
+        digits_context = re.sub(r"\D", "", context_norm)
+
+        barcode_hit = any(v and v in digits_context for v in barcode_variants)
+        token_hits = sum(1 for t in product_tokens if t in context_norm)
+        required_hits = 2 if len(product_tokens) <= 5 else 3
+
+        commerce_context = any(x in context_norm for x in [
+            "cat", "dog", "pet", "feline", "canine", "food", "treat",
+            "formula", "diet", "nutrition", "shop", "store", "cart", "price",
+            "buy", "hkd", "hk", "hong kong", "香港", "港幣", "加入購物車", "立即購買",
+            "hktvmall", "vetopia", "epet",
+        ])
+
+        if not _has_hk_signal(url, context):
+            return
+        if not commerce_context:
+            return
+        if not barcode_hit and token_hits < required_hits:
+            return
+
+        price = _extract_hkd_price(context)
+        seen.add(url)
+        listings.append({
+            "retailer_name": host,
+            "url": url,
+            "price_hkd": price,
+            "in_stock": None,
+            "notes": f"Discovered by SerpAPI query: {query}. Snippet: {snippet[:240]}",
+        })
+        notes.append(f"{title}\n{url}\n{snippet}\n")
+
+    for query in queries:
+        if calls_made >= max_calls:
+            break
+        if budget and not budget.can_call_hk():
+            log.info("SerpAPI HK budget exhausted; skipping remaining HK queries.")
+            break
+
+        try:
+            log.info("SerpAPI HK search query: %s", query)
+            if budget:
+                budget.record_hk()
+            calls_made += 1
+
+            resp = http_requests.get(
+                "https://serpapi.com/search",
+                params={
+                    "engine": "google",
+                    "q": query,
+                    "api_key": api_key,
+                    "hl": "en",
+                    "gl": "hk",
+                    "google_domain": "google.com.hk",
+                    "num": 10,
+                },
+                timeout=30,
+            )
+            log.info("SerpAPI HK HTTP %s", resp.status_code)
+            if resp.status_code >= 400:
+                log.warning("SerpAPI HK error body: %s", resp.text[:500])
+                continue
+
+            data = resp.json()
+            if data.get("error"):
+                log.warning("SerpAPI HK API error: %s", data.get("error"))
+                continue
+
+            for item in data.get("organic_results", []) or []:
+                add_candidate(
+                    url=item.get("link"),
+                    title=item.get("title") or "",
+                    snippet=item.get("snippet") or "",
+                    rich=item.get("rich_snippet") or {},
+                    query=query,
+                )
+                if len(listings) >= max_results:
+                    break
+
+            # Same SerpAPI call may include shopping/product blocks. Parse them too at no extra cost.
+            for block_name in ["shopping_results", "inline_shopping_results", "product_results"]:
+                block = data.get(block_name) or []
+                if isinstance(block, dict):
+                    block = [block]
+                for item in block:
+                    url = item.get("link") or item.get("product_link") or item.get("serpapi_product_api")
+                    title = item.get("title") or item.get("name") or ""
+                    snippet = " ".join(str(item.get(k) or "") for k in ["snippet", "description", "price", "extracted_price", "source"])
+                    add_candidate(url=url, title=title, snippet=snippet, rich=item, query=query)
+                    if len(listings) >= max_results:
+                        break
+                if len(listings) >= max_results:
+                    break
+
+            if len(listings) >= max_results:
+                break
+
+            # Early stop if we already have enough candidates to validate.
+            if len(listings) >= _env_int("SERPAPI_HK_EARLY_STOP_CANDIDATES", 6):
+                break
+
+        except Exception as exc:
+            log.warning("SerpAPI HK URL search failed for query=%s: %s", query, exc)
+
+    result_notes = "\n".join(notes)
+    payload = {"listings": listings[:max_results], "notes": result_notes}
+    if listings:
+        _write_serpapi_cache("hk", barcode, product_name, payload)
+    return listings[:max_results], result_notes
+
+
+def _gemini_vision_verify_product_image(
+    self,
+    image_bytes: bytes,
+    product_name: str,
+    brand: str,
+    barcode: str,
+) -> bool:
+    """
+    Ask Gemini Vision whether the candidate image appears to be the correct product.
+    This does NOT discover images. It only verifies a candidate image.
+    """
+    try:
+        prompt = f"""
+You are verifying a product image candidate.
+
+Verified product:
+- Product name: {product_name}
+- Brand: {brand}
+- Barcode/UPC/EAN: {barcode}
+
+Question:
+Does this image appear to show the actual retail product/package for this verified product?
+
+Return ONLY valid JSON:
+{{
+  "is_match": true,
+  "confidence": "high|medium|low",
+  "reason": "short explanation"
+}}
+
+Rules:
+- Return false for logos, certification seals, trust badges, payment icons, banners, placeholders, or unrelated products.
+- Return true only if the visible package/label appears to match the product name and brand.
+"""
+
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=[
+                prompt,
+                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            ],
+            config=self._extract_config,
+        )
+
+        raw = _collect_text(response)
+        data = _extract_json(raw)
+
+        return (
+            bool(data.get("is_match"))
+            and data.get("confidence") in {"high", "medium"}
+        )
+
+    except Exception as exc:
+        log.warning("Gemini vision image verification failed safely: %s", exc)
+        return False
 
 def _get_page_text(url: str) -> tuple[bool, str, str, int]:
     """
@@ -619,6 +1397,9 @@ _IMAGE_PLACEHOLDER_MARKERS = [
     "placeholder", "no-image", "no_image", "noimage", "blank", "transparent",
     "spacer", "loading", "loader", "spinner", "default", "dummy", "logo",
     "icon", "favicon", "avatar", "banner", "btn", "button", "sprite", "pixel",
+    "seal", "seals", "certified", "certificate", "certification", "trust",
+    "secure", "payment", "visa", "mastercard", "paypal", "badge",
+    "legitscript", "trustpilot", "verified", "widget", "social",
 ]
 
 
@@ -781,6 +1562,8 @@ def _valid_direct_image_url(
         return None
     if _looks_like_placeholder_image_url(u):
         return None
+    if _image_negative_asset_penalty(u, product_name or "", brand or "") >= 100:
+        return None
 
     try:
         resp = http_requests.get(u, headers=_HTTP_HEADERS, timeout=_URL_TIMEOUT, allow_redirects=True)
@@ -793,6 +1576,8 @@ def _valid_direct_image_url(
         if "image/" not in ctype and not re.search(r"\.(?:jpg|jpeg|png|webp|gif)$", final_path):
             return None
         if _looks_like_placeholder_image_url(final_url):
+            return None
+        if _image_negative_asset_penalty(final_url, product_name or "", brand or "") >= 100:
             return None
 
         data = resp.content or b""
@@ -1790,29 +2575,11 @@ class ProductSearcher:
                 if item.get("in_stock") is None and page_stock is not None:
                     item["in_stock"] = page_stock
             else:
-                # Fallback path: only use search-snippet validation for blocked/JS cases,
-                # not for URLs that actually return 404/not-found content.
-                probe_ok, _probe_final, probe_html, probe_status = _get_page_text(url)
-                if probe_status == 404 or (probe_html and _page_is_not_found(probe_html)):
-                    log.info("  Dead/error/wrong product URL dropped: %s", url)
-                    continue
-
-                snippet_context = _context_for_url(facts, url)
-                snippet_ok, snippet_price, snippet_stock = _search_snippet_valid_listing(
-                    url,
-                    "\n".join([str(item), snippet_context]),
-                    barcode,
-                    product_name,
-                    brand,
-                )
-                if not snippet_ok:
-                    log.info("  Dead/error/wrong product URL dropped: %s", url)
-                    continue
-                if not item.get("price_hkd") and snippet_price:
-                    item["price_hkd"] = snippet_price
-                if item.get("in_stock") is None and snippet_stock is not None:
-                    item["in_stock"] = snippet_stock
-                item["notes"] = (item.get("notes") or "") + " | Price/URL validated from search snippet; live page check failed or was JS/protected."
+                # Verifiable buy URLs must open and validate in Python.
+                # Do not accept snippet-only URLs as final buy links; this prevents
+                # broken/blocked URLs from appearing as purchase sources.
+                log.info("  Dropping retailer URL because live page validation failed: %s", url)
+                continue
 
             item["price_hkd"] = _format_hkd_price(item.get("price_hkd"))
             if not item.get("price_hkd"):
@@ -2048,22 +2815,171 @@ class ProductSearcher:
 
         return listings, facts, recovered_urls
 
+    def _vision_verify_product_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_name: str,
+        brand: str,
+        barcode: str,
+    ) -> bool:
+        """
+        Ask Gemini Vision whether the candidate image appears to be the correct product.
+        This verifies candidates discovered by SerpAPI / page extraction. It does not
+        perform image search by itself.
+        """
+        try:
+            prompt = f"""
+You are verifying a product image candidate.
+
+Verified product:
+- Product name: {product_name}
+- Brand: {brand}
+- Barcode/UPC/EAN: {barcode}
+
+Does this image show the actual retail product/package for this verified product?
+
+Return ONLY valid JSON:
+{{
+  "is_match": true,
+  "confidence": "high|medium|low",
+  "reason": "short explanation"
+}}
+
+Rules:
+- Return false for logos, certification seals, trust badges, payment icons, banners, placeholders, or unrelated products.
+- Return true only if the visible package/label appears to match the product name and brand.
+"""
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type or "image/jpeg"),
+                ],
+                config=self._extract_config,
+            )
+            raw = _collect_text(response)
+            data = _extract_json(raw)
+            return bool(data.get("is_match")) and data.get("confidence") in {"high", "medium"}
+        except Exception as exc:
+            log.warning("Gemini vision image verification failed safely: %s", exc)
+            return False
+
+    def _fetch_reliable_product_image_url(
+        self,
+        barcode: str,
+        product_name: str,
+        brand: str,
+        serpapi_budget: SerpApiBudget | None = None,
+    ) -> str | None:
+        """
+        Reliable GLOBAL product image discovery using SerpAPI Google Images first.
+
+        Selection order:
+          1. Discover candidates with SerpAPI Google Images.
+          2. Validate each image with Python: image/* response, dimensions, product-token
+             evidence, and non-product asset penalties.
+          3. Prefer official/brand/manufacturer-looking candidates when available.
+          4. Gemini Vision checks only the top N candidates to control cost.
+          5. If Vision fails or is unavailable, use the best Python-validated candidate.
+
+        Important:
+          - This is GLOBAL image search, not HK-only.
+          - The image does not need to come from a Hong Kong retailer.
+          - If a verified brand/manufacturer image exists, it should win over retailer/CDN
+            images such as BigCommerce/CDN product copies.
+        """
+        log.info("Phase 1B – SerpAPI global product image search …")
+        candidates = _serpapi_google_image_candidates(
+            product_name=product_name,
+            brand=brand,
+            barcode=barcode,
+            max_results=_env_int("SERPAPI_IMAGE_MAX_CANDIDATES", 20),
+            budget=serpapi_budget,
+        )
+        if not candidates:
+            log.info("No SerpAPI image candidates found; falling back to Gemini grounding image discovery.")
+            return None
+
+        official_ranked: list[tuple[int, str, bytes, str]] = []
+        other_ranked: list[tuple[int, str, bytes, str]] = []
+
+        for candidate in candidates:
+            ok, final_url, image_bytes, mime_type, score = _is_candidate_image_valid(
+                candidate=candidate,
+                product_name=product_name,
+                brand=brand,
+                barcode=barcode,
+            )
+            if not ok or not final_url or not image_bytes or not mime_type:
+                continue
+
+            source_url = str(candidate.get("source_url") or "")
+            title = str(candidate.get("title") or "")
+
+            if _is_official_brand_image_candidate(candidate, final_url, product_name, brand):
+                # Large bonus forces verified official/brand sources to win over retailer CDNs.
+                official_score = score + _candidate_brand_source_bonus(candidate, final_url, brand) + 1000
+                log.info(
+                    "Official/brand image candidate score=%s url=%s source=%s title=%s",
+                    official_score,
+                    final_url,
+                    source_url,
+                    title[:120],
+                )
+                official_ranked.append((official_score, final_url, image_bytes, mime_type))
+            else:
+                log.info(
+                    "Retailer/catalog image candidate score=%s url=%s source=%s title=%s",
+                    score,
+                    final_url,
+                    source_url,
+                    title[:120],
+                )
+                other_ranked.append((score, final_url, image_bytes, mime_type))
+
+        official_ranked.sort(key=lambda x: x[0], reverse=True)
+        other_ranked.sort(key=lambda x: x[0], reverse=True)
+        ranked = official_ranked + other_ranked
+
+        if not ranked:
+            log.warning("No SerpAPI image candidates passed Python validation.")
+            return None
+
+        # Verify only top few with Gemini Vision to control cost.
+        # Because official candidates are now ranked first, Vision sees the best source first.
+        vision_limit = _env_int("SERPAPI_VISION_MAX_CANDIDATES", 1)
+        for score, image_url, image_bytes, mime_type in ranked[:vision_limit]:
+            if self._vision_verify_product_image(image_bytes, mime_type, product_name, brand, barcode):
+                log.info("Selected Gemini-verified SerpAPI product image: %s score=%s", image_url, score)
+                return image_url
+
+        # Safe fallback: top Python-validated image.
+        # If an official/brand image passed validation, it will be ranked before retailer/CDN images.
+        best_score, best_url, _best_bytes, _best_mime = ranked[0]
+        log.info("Selected Python-validated SerpAPI product image: %s score=%s", best_url, best_score)
+        return best_url
+
     def _fetch_global_product_image(
         self,
         barcode: str,
         product_name: str,
         brand: str,
         seed_pages: list[str] | None = None,
+        serpapi_budget: SerpApiBudget | None = None,
     ) -> str | None:
         """
         Global product-image discovery.
 
-        Unlike retailer/pricing lookup, this is intentionally NOT restricted to
-        Hong Kong. It only validates that the image is a real, non-placeholder
-        product image and that the source/candidate text matches the verified
-        product identity.
+        SerpAPI Google Images is used first because Gemini grounding often returns
+        text but zero usable image URLs. If SerpAPI has no usable candidate, fall
+        back to the older Gemini grounding/page-extraction path.
         """
-        log.info("Phase 1B – global product image discovery …")
+        serpapi_image = self._fetch_reliable_product_image_url(barcode, product_name, brand, serpapi_budget)
+        if serpapi_image:
+            return serpapi_image
+
+        log.info("Phase 1B – fallback global product image discovery via Gemini grounding …")
         facts, grounded_urls, _ = self._grounded_search(
             _GLOBAL_IMAGE_SEARCH_PROMPT.format(
                 barcode=barcode,
@@ -2074,8 +2990,6 @@ class ProductSearcher:
         )
 
         candidates = self._extract_image_candidates_json(barcode, product_name, brand, facts)
-
-        # First try direct image URLs from structured candidates and raw notes.
         direct_urls: list[str] = []
         page_urls: list[str] = []
 
@@ -2098,8 +3012,6 @@ class ProductSearcher:
             add_direct(item.get("image_url"))
             add_page(item.get("source_url"))
 
-        # Raw URL extraction catches cases where Gemini mentions direct URLs in notes
-        # but did not put them into the structured JSON.
         for u in _clean_url_list(grounded_urls, limit=25) + _extract_candidate_urls_from_text(facts):
             path = urlparse(u).path.lower()
             if re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:$|[?])", path):
@@ -2107,10 +3019,6 @@ class ProductSearcher:
             else:
                 add_page(u)
 
-        # If the first image search produced text but no usable URLs, run one
-        # URL-focused recovery pass. This mirrors a normal Google product-image
-        # search using the already verified product name, but every result still
-        # goes through Python image validation.
         if not direct_urls and not page_urls:
             recovered_items, recovered_facts, recovered_urls = self._recover_global_image_candidates(
                 barcode=barcode,
@@ -2133,10 +3041,12 @@ class ProductSearcher:
             add_page(u)
 
         for img_url in direct_urls[:20]:
-            valid = _valid_direct_image_url(img_url, product_name, brand)
-            if valid:
-                log.info("Global product image selected from direct URL: %s", valid)
-                return valid
+            candidate = {"image_url": img_url, "source_url": "", "title": product_name}
+            ok, final_url, image_bytes, mime_type, _score = _is_candidate_image_valid(candidate, product_name, brand, barcode)
+            if ok and final_url and image_bytes and mime_type:
+                if self._vision_verify_product_image(image_bytes, mime_type, product_name, brand, barcode):
+                    log.info("Global product image selected from direct URL: %s", final_url)
+                    return final_url
 
         for page_url in page_urls[:20]:
             img = _extract_best_image_from_page(page_url, product_name, brand)
@@ -2155,18 +3065,29 @@ class ProductSearcher:
         product_name: str,
         brand: str,
         seed_texts: list[str] | None = None,
+        serpapi_budget: SerpApiBudget | None = None,
     ) -> str | None:
         """
-        Resolve image using global product-image rules, while keeping pricing HK-only.
+        Resolve product image using GLOBAL product-image rules.
 
-        Order:
-        1. Existing direct image_url if valid.
-        2. Manufacturer/evidence/retailer pages already discovered.
-        3. Fresh global image search via Gemini grounding.
+        Correct generic order:
+          1. SerpAPI Google Images first, using verified product name/brand/barcode.
+          2. If SerpAPI fails, try validated direct image_url from product identity.
+          3. Try manufacturer/evidence/product pages already discovered.
+          4. Final fallback to Gemini grounding/page image extraction.
+
+        Pricing/location rules do not apply to image search.
         """
-        local = _resolve_product_image(prod_data, retailers, product_name, brand)
-        if local:
-            return local
+        # SerpAPI-first. This prevents a weaker Gemini/evidence image from
+        # winning before Google Images candidates are checked.
+        serpapi_image = self._fetch_reliable_product_image_url(
+            barcode=barcode,
+            product_name=product_name,
+            brand=brand,
+            serpapi_budget=serpapi_budget,
+        )
+        if serpapi_image:
+            return serpapi_image
 
         seed_pages: list[str] = []
         for u in [prod_data.get("manufacturer_url"), *(prod_data.get("evidence_urls") or [])]:
@@ -2183,16 +3104,46 @@ class ProductSearcher:
             if cleaned and cleaned not in seed_pages:
                 seed_pages.append(cleaned)
 
-        return self._fetch_global_product_image(barcode, product_name, brand, seed_pages)
+        direct = _valid_direct_image_url(prod_data.get("image_url"), product_name, brand)
+        if direct:
+            return direct
+
+        for page_url in seed_pages[:15]:
+            image = _extract_best_image_from_page(page_url, product_name, brand)
+            if image:
+                log.info("Global product image selected from evidence page: %s", page_url)
+                return image
+
+        return self._fetch_global_product_image(barcode, product_name, brand, seed_pages, serpapi_budget)
 
     def _fetch_hk_retailers(
         self,
         barcode: str,
         product_name: str,
         brand: str,
+        serpapi_budget: SerpApiBudget | None = None,
     ) -> list[RetailerListing]:
         valid: list[RetailerListing] = []
         existing: set[str] = set()
+
+        # SerpAPI normal Google Search is the primary URL discovery layer for
+        # HK buy pages. Gemini can still reason/extract, but it is not reliable
+        # enough as the only URL source.
+        serpapi_listings, serpapi_facts = _serpapi_hk_product_page_candidates(
+            product_name=product_name,
+            brand=brand or "",
+            barcode=barcode,
+            max_results=_env_int("SERPAPI_HK_MAX_CANDIDATES", 15),
+            budget=serpapi_budget,
+        )
+        if serpapi_listings:
+            log.info("SerpAPI HK URL discovery returned %d candidate(s).", len(serpapi_listings))
+            for r in self._validate_retailers(serpapi_listings, barcode, product_name, brand, serpapi_facts):
+                if r.url not in existing:
+                    valid.append(r)
+                    existing.add(r.url)
+            if len(valid) >= _MIN_RETAILERS:
+                return valid[:_MAX_RETAILERS]
 
         for attempt in range(1 + _EXTRA_SEARCH_ROUNDS):
             if attempt > 0:
@@ -2303,6 +3254,9 @@ class ProductSearcher:
 
         Only verified product identities are returned as cacheable ProductInfo.
         """
+        # One per-lookup SerpAPI budget prevents a single barcode from burning many calls.
+        serpapi_budget = SerpApiBudget()
+
         # ── Phase 1: GLOBAL product identity ──────────────────────
         prod_data, raw_facts = self._fetch_product_info(barcode)
 
@@ -2357,6 +3311,7 @@ class ProductSearcher:
             product_name=product_name,
             brand=brand,
             seed_texts=[raw_facts],
+            serpapi_budget=serpapi_budget,
         )
 
         # ── Phase 4: HK-only pricing + buy URLs ───────────────────
@@ -2365,6 +3320,7 @@ class ProductSearcher:
             barcode=barcode,
             product_name=product_name,
             brand=brand,
+            serpapi_budget=serpapi_budget,
         )
 
         return ProductInfo(
