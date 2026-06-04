@@ -1,6 +1,6 @@
 # Environment / secrets
 .env
-.env.*
+.env
 .env-*
 .env copy
 *.env
