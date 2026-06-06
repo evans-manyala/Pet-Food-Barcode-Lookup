@@ -1,0 +1,9 @@
+# EC2 / non-GCP hosts: mount a GCP service account JSON key for Vertex AI.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ec2.yml up -d --build
+
+services:
+  app:
+    volumes:
+      - ${GCP_SA_KEY_PATH:-./deploy/gcp-sa-key.json}:/app/gcp-sa-key.json:ro
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /app/gcp-sa-key.json

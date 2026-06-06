@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Look up pet food products by barcode — nutritional info and Hong Kong retailer prices." />
+  <title>Pet Food Barcode Lookup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header__inner">
+        <div class="brand">
+          <span class="brand__icon" aria-hidden="true">🐾</span>
+          <div>
+            <h1 class="brand__title">Pet Food Barcode Lookup</h1>
+            <p class="brand__subtitle">Nutrition · HK pricing · Verified sources</p>
+          </div>
+        </div>
+        <nav class="header__nav" aria-label="Status">
+          <span class="status-pill" id="api-status" data-state="checking">API</span>
+        </nav>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="search-section" aria-labelledby="search-heading">
+        <div class="search-card">
+          <h2 id="search-heading" class="search-card__title">Scan or enter a barcode</h2>
+          <p class="search-card__hint">Supports EAN-13, UPC-A, and EAN-8 with GS-1 check digit validation.</p>
+
+          <form id="lookup-form" class="search-form" novalidate>
+            <div class="search-form__row">
+              <label class="sr-only" for="barcode-input">Barcode</label>
+              <div class="input-wrap">
+                <svg class="input-wrap__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M3 5h2v14H3zM7 5h1v14H7zM10 5h2v14h-2zM14 5h1v14h-1zM17 5h3v14h-3z"/>
+                </svg>
+                <input
+                  id="barcode-input"
+                  class="search-form__input"
+                  type="text"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="e.g. 9003579008331"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="13"
+                  required
+                />
+              </div>
+              <button type="submit" class="btn btn--primary" id="lookup-btn">
+                <span class="btn__label">Look up</span>
+                <span class="btn__spinner" hidden aria-hidden="true"></span>
+              </button>
+            </div>
+
+            <div class="search-form__options">
+              <label class="checkbox">
+                <input type="checkbox" id="force-refresh" />
+                <span class="checkbox__box" aria-hidden="true"></span>
+                <span>Force fresh search (bypass cache)</span>
+              </label>
+            </div>
+          </form>
+
+          <div class="search-examples" aria-label="Example barcodes">
+            <span class="search-examples__label">Try:</span>
+            <button type="button" class="chip" data-barcode="9003579008331">9003579008331</button>
+            <button type="button" class="chip" data-barcode="0023100031105">0023100031105</button>
+          </div>
+        </div>
+      </section>
+
+      <div id="alert" class="alert" role="alert" hidden></div>
+
+      <section id="loading" class="loading" hidden aria-live="polite">
+        <div class="loading__card">
+          <div class="loading__spinner" aria-hidden="true"></div>
+          <p class="loading__title">Searching product databases…</p>
+          <p class="loading__steps" id="loading-steps">Checking Redis cache → Pinecone → live web search</p>
+        </div>
+      </section>
+
+      <section id="results" class="results" hidden aria-live="polite">
+        <div class="results__meta">
+          <span class="source-badge" id="source-badge"></span>
+          <span class="verified-badge" id="verified-badge"></span>
+        </div>
+
+        <article class="product-hero">
+          <div class="product-hero__image-wrap">
+            <img id="product-image" class="product-hero__image" src="" alt="" hidden />
+            <div id="product-image-fallback" class="product-hero__fallback" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="8" y="16" width="48" height="36" rx="4"/>
+                <circle cx="24" cy="30" r="4"/>
+                <path d="M8 44l12-10 10 8 14-12 12 14"/>
+              </svg>
+            </div>
+          </div>
+          <div class="product-hero__info">
+            <p class="product-hero__brand" id="product-brand"></p>
+            <h2 class="product-hero__name" id="product-name"></h2>
+            <div class="product-hero__tags" id="product-tags"></div>
+            <p class="product-hero__barcode">
+              <span class="label">Barcode</span>
+              <code id="product-barcode"></code>
+            </p>
+            <div class="product-hero__links" id="product-links"></div>
+          </div>
+          <aside class="best-price" id="best-price" hidden>
+            <p class="best-price__label">Best price in HK</p>
+            <p class="best-price__value" id="best-price-value"></p>
+            <p class="best-price__store" id="best-price-store"></p>
+          </aside>
+        </article>
+
+        <div id="warnings" class="warnings" hidden></div>
+
+        <div class="panels">
+          <section class="panel panel--product" aria-labelledby="panel-product-title">
+            <header class="panel__header">
+              <span class="panel__icon" aria-hidden="true">🏷</span>
+              <h3 id="panel-product-title" class="panel__title">Product Information</h3>
+            </header>
+            <dl class="detail-list" id="product-details"></dl>
+          </section>
+
+          <section class="panel panel--nutrition" aria-labelledby="panel-nutrition-title">
+            <header class="panel__header">
+              <span class="panel__icon" aria-hidden="true">🧪</span>
+              <h3 id="panel-nutrition-title" class="panel__title">Nutritional / Guaranteed Analysis</h3>
+            </header>
+            <div id="nutrition-content" class="nutrition-grid"></div>
+          </section>
+
+          <section class="panel panel--retailers panel--full" aria-labelledby="panel-retailers-title">
+            <header class="panel__header">
+              <span class="panel__icon" aria-hidden="true">🛒</span>
+              <h3 id="panel-retailers-title" class="panel__title">Hong Kong Online Retailers</h3>
+              <p class="panel__subtitle">Prices in HK$ · Sorted lowest first</p>
+            </header>
+            <div class="table-wrap">
+              <table class="retailer-table" id="retailer-table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">Retailer</th>
+                    <th scope="col">Price (HKD)</th>
+                    <th scope="col">Stock</th>
+                    <th scope="col">Product URL</th>
+                    <th scope="col">Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="retailer-tbody"></tbody>
+              </table>
+            </div>
+            <div id="retailer-cards" class="retailer-cards" hidden></div>
+            <p id="no-retailers" class="empty-state" hidden>No Hong Kong retailers found for this product.</p>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Powered by Gemini AI · Redis · Pinecone</p>
+      <p class="footer__beta">Beta preview — test barcodes and share UI/UX feedback with the team.</p>
+    </footer>
+  </div>
+
+  <script src="/assets/js/app.js" type="module"></script>
+</body>
+</html>

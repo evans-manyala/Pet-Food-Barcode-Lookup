@@ -21,3 +21,7 @@ release.tar.gz
 
 # Large generated archives that aren't useful to the assistant
 *.zip
+
+# Deployment secrets
+deploy/gcp-sa-key.json
+*-sa-key.json

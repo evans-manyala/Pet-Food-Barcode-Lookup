@@ -35,6 +35,9 @@ class Settings(BaseSettings):
 
     # ── App ────────────────────────────────────────────────────────────────
     log_level: str = "INFO"
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_reload: bool = False
 
 
 @lru_cache(maxsize=1)
