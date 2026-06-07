@@ -1,0 +1,7 @@
+# Production behind nginx: app only on localhost (not public port 80).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+services:
+  app:
+    ports:
+      - "127.0.0.1:8000:8000"

@@ -2,6 +2,8 @@
 
 Public demo URL pattern: `http://YOUR_PUBLIC_IP/` — share with testers for UI feedback.
 
+> **CI/CD + custom domain** (`api.mydomain.com`): see [CICD.md](./CICD.md)
+
 ---
 
 ## What gets deployed
