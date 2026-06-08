@@ -1,54 +1,88 @@
-# Deploy Pet Food Barcode Lookup (GCP VM or EC2)
+# Deploy Pet Food Barcode Lookup — Step-by-Step (GCP VM)
 
-Public demo URL pattern: `http://YOUR_PUBLIC_IP/` — share with testers for UI feedback.
+Execute these steps **in order** on your Mac (`gcloud`) and on the VM (`ssh`).
 
-> **CI/CD + custom domain** (`api.mydomain.com`): see [CICD.md](./CICD.md)
+**Your values** (fill in if different):
 
----
+| Setting | Value |
+|---------|-------|
+| GCP project | `project-11d80abc-a7c0-43df-9ed` |
+| VM name | `pet-food-lookup` |
+| Zone | `us-central1-a` |
+| Service account | `barcode-pet-food-lookup@project-11d80abc-a7c0-43df-9ed.iam.gserviceaccount.com` |
+| GitHub repo | `git@github.com:evans-manyala/Pet-Food-Barcode-Lookup.git` |
+| App path on VM | `~/pet-food-barcode-lookup` |
 
-## What gets deployed
+**Choose a path:**
 
-| Component | Role |
-|-----------|------|
-| **FastAPI + frontend** | Web UI on port 80 (configurable) |
-| **Redis** | Local cache (Docker) |
-| **Pinecone** | Permanent vector store (cloud) |
-| **Vertex AI / Gemini** | Live product search |
-
----
-
-## Prerequisites
-
-1. **GCP project** with [Vertex AI API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled
-2. API keys in `.env`: OpenRouter, Pinecone, SerpAPI (see `deploy/env.production.example`)
-3. **Service account** with role **Vertex AI User** (`roles/aiplatform.user`)
+| Path | URL | Guide |
+|------|-----|-------|
+| **A — Quick IP demo (Docker)** | `http://VM_IP/` | Steps 1–10 below, Path A |
+| **B — Domain + CI/CD (Docker)** | `https://api.mindmycat.com/` | Steps 1–10 below, Path B → [CICD.md](./CICD.md) |
+| **C — Native (no Docker)** | `http://VM_IP:8000/` | Steps 1–8 + [Native deploy](#option-c--native-deploy-no-docker) below |
 
 ---
 
-## Option A — GCP Compute Engine (recommended)
+## Part 1 — GCP setup (run on your Mac)
 
-Vertex AI runs in the same cloud; use a VM **service account** (no JSON key needed).
+### Step 1. Set active project
 
-### 1. Create the VM
+```bash
+gcloud config set project project-11d80abc-a7c0-43df-9ed
+```
+
+### Step 2. Enable Vertex AI API
+
+```bash
+gcloud services enable aiplatform.googleapis.com
+```
+
+### Step 3. Create service account (skip if `barcode-pet-food-lookup` already exists)
+
+```bash
+gcloud iam service-accounts create barcode-pet-food-lookup \
+  --display-name="Pet Food Barcode Lookup"
+```
+
+### Step 4. Grant Vertex AI User role (CLI — use this if the Console role picker doesn't show it)
+
+```bash
+gcloud projects add-iam-policy-binding project-11d80abc-a7c0-43df-9ed \
+  --member="serviceAccount:barcode-pet-food-lookup@project-11d80abc-a7c0-43df-9ed.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+Verify:
+
+```bash
+gcloud projects get-iam-policy project-11d80abc-a7c0-43df-9ed \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:barcode-pet-food-lookup@project-11d80abc-a7c0-43df-9ed.iam.gserviceaccount.com" \
+  --format="table(bindings.role)"
+```
+
+Expected: `roles/aiplatform.user`
+
+### Step 5. Create the VM (skip if `pet-food-lookup` already exists)
 
 ```bash
 gcloud compute instances create pet-food-lookup \
-  --project=YOUR_PROJECT_ID \
+  --project=project-11d80abc-a7c0-43df-9ed \
   --zone=us-central1-a \
   --machine-type=e2-small \
   --image-family=ubuntu-2204-lts \
   --image-project=ubuntu-os-cloud \
   --boot-disk-size=20GB \
   --tags=http-server \
-  --service-account=YOUR_SA@YOUR_PROJECT_ID.iam.gserviceaccount.com \
+  --service-account=barcode-pet-food-lookup@project-11d80abc-a7c0-43df-9ed.iam.gserviceaccount.com \
   --scopes=https://www.googleapis.com/auth/cloud-platform
 ```
 
-### 2. Open firewall
+### Step 6. Open firewall (HTTP)
 
 ```bash
 gcloud compute firewall-rules create allow-pet-food-http \
-  --project=YOUR_PROJECT_ID \
+  --project=project-11d80abc-a7c0-43df-9ed \
   --direction=INGRESS \
   --priority=1000 \
   --network=default \
@@ -58,112 +92,240 @@ gcloud compute firewall-rules create allow-pet-food-http \
   --target-tags=http-server
 ```
 
-### 3. SSH and deploy
+> If the rule already exists, gcloud will error — that's fine, continue.
+
+### Step 7. Get the VM public IP (save this)
 
 ```bash
-gcloud compute ssh pet-food-lookup --zone=us-central1-a
-
-# On the VM:
-git clone https://github.com/YOUR_USER/Pet-Food-Barcode-Lookup.git ~/pet-food-barcode-lookup
-cd ~/pet-food-barcode-lookup
-cp deploy/env.production.example .env
-nano .env   # fill in API keys + GOOGLE_CLOUD_PROJECT
-
-PLATFORM=gcp APP_DIR=$HOME/pet-food-barcode-lookup bash deploy/setup-vm.sh
-```
-
-### 4. Share with testers
-
-```bash
-gcloud compute instances describe pet-food-lookup --zone=us-central1-a \
+gcloud compute instances describe pet-food-lookup \
+  --zone=us-central1-a \
+  --project=project-11d80abc-a7c0-43df-9ed \
   --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 ```
 
-Open `http://NAT_IP/` in a browser.
-
 ---
 
-## Option B — AWS EC2
+## Part 2 — First deploy on the VM
 
-EC2 cannot use GCP metadata auth — you need a **service account JSON key**.
-
-### 1. Create GCP service account key
-
-GCP Console → IAM → Service Accounts → your SA → Keys → Add key → JSON.
-
-Save as `deploy/gcp-sa-key.json` on the server (never commit this file).
-
-### 2. Launch EC2
-
-- **AMI:** Ubuntu 22.04 LTS
-- **Type:** `t3.small` (or larger for faster lookups)
-- **Storage:** 20 GB
-- **Security group inbound:** TCP 22 (SSH), TCP 80 (HTTP) from `0.0.0.0/0`
-
-### 3. SSH and deploy
+### Step 8. SSH into the VM
 
 ```bash
-ssh -i your-key.pem ubuntu@EC2_PUBLIC_IP
+gcloud compute ssh pet-food-lookup \
+  --zone=us-central1-a \
+  --project=project-11d80abc-a7c0-43df-9ed
+```
 
-git clone https://github.com/YOUR_USER/Pet-Food-Barcode-Lookup.git ~/pet-food-barcode-lookup
+Re-connect anytime with the same command.
+
+### Step 9. Clone the repo on the VM
+
+**Private repo** — generate a deploy key on the VM first:
+
+```bash
+# On the VM:
+ssh-keygen -t ed25519 -C "vm-deploy" -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub
+```
+
+Add that public key in GitHub → repo **Settings** → **Deploy keys** → **Add deploy key** (read-only).
+
+Then on the VM:
+
+```bash
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/github_deploy
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+git clone git@github.com:evans-manyala/Pet-Food-Barcode-Lookup.git ~/pet-food-barcode-lookup
 cd ~/pet-food-barcode-lookup
+```
 
-# Upload gcp-sa-key.json (from your laptop):
-# scp -i your-key.pem deploy/gcp-sa-key.json ubuntu@EC2_PUBLIC_IP:~/pet-food-barcode-lookup/deploy/
+### Step 10. Create `.env` on the VM
 
+```bash
 cp deploy/env.production.example .env
 nano .env
-
-PLATFORM=ec2 APP_DIR=$HOME/pet-food-barcode-lookup bash deploy/setup-vm.sh
 ```
 
-Share: `http://EC2_PUBLIC_IP/`
+**Required values** (copy from your local `.env`):
 
----
+```dotenv
+GOOGLE_CLOUD_PROJECT=project-11d80abc-a7c0-43df-9ed
+GOOGLE_CLOUD_LOCATION=us-central1
+GEMINI_MODEL=gemini-2.5-flash
 
-## Manual Docker commands
+OPENROUTER_API_KEY=...
+SERPAPI_API_KEY=...
+PINECONE_API_KEY=...
+PINECONE_INDEX_NAME=pet-food-products
+PINECONE_NAMESPACE=pet-food
+```
+
+**Optional — copy from Mac instead of typing:**
 
 ```bash
-# GCP VM
-docker compose up -d --build
-
-# EC2
-docker compose -f docker-compose.yml -f docker-compose.ec2.yml up -d --build
-
-# Logs
-docker compose logs -f app
-
-# Restart after .env changes
-docker compose up -d --build app
+# Run on your Mac (not the VM):
+gcloud compute scp .env pet-food-lookup:~/pet-food-barcode-lookup/.env \
+  --zone=us-central1-a --project=project-11d80abc-a7c0-43df-9ed
 ```
 
 ---
 
-## Health check
+## Part 3 — Start the app
+
+### Path A — Quick IP demo (`http://VM_IP/`)
+
+On the VM:
+
+```bash
+cd ~/pet-food-barcode-lookup
+PLATFORM=gcp APP_DIR=$HOME/pet-food-barcode-lookup bash deploy/setup-vm.sh
+```
+
+After it finishes, open in a browser:
+
+```
+http://<VM_IP>/
+http://<VM_IP>/?barcode=9003579008331
+http://<VM_IP>/api/health
+```
+
+**Verify on the VM:**
 
 ```bash
 curl http://localhost/api/health
-# {"status":"ok","service":"pet-food-barcode-lookup"}
+sudo docker compose ps
+sudo docker compose logs -f app   # Ctrl+C to exit
+```
+
+✅ **Done for Path A.** Share the IP URL with testers.
+
+---
+
+### Path B — Domain + HTTPS (continue to CICD.md)
+
+On the VM, install Docker but bind the app on port **8000** (nginx will take port 80 later):
+
+```bash
+cd ~/pet-food-barcode-lookup
+PLATFORM=gcp APP_PORT=8000 APP_DIR=$HOME/pet-food-barcode-lookup bash deploy/setup-vm.sh
+```
+
+Smoke-test before nginx:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+Then continue with **[CICD.md](./CICD.md)** — DNS, SSL, GitHub Actions.
+
+---
+
+## Option C — Native deploy (no Docker)
+
+Simpler stack: **Python venv + Redis (apt) + systemd**. No Docker install or compose files.
+
+**Advantages:** easier logs (`journalctl`), Vertex AI auth works directly via VM service account, fewer moving parts.
+
+**Trade-off:** app runs on port **8000** by default (use nginx script for port 80/HTTPS).
+
+### C1. Stop Docker if it was running before
+
+```bash
+cd ~/pet-food-barcode-lookup
+sudo docker compose down 2>/dev/null || true
+```
+
+### C2. Clone repo + `.env` (same as Steps 9–10)
+
+```bash
+git clone git@github.com:evans-manyala/Pet-Food-Barcode-Lookup.git ~/pet-food-barcode-lookup
+cd ~/pet-food-barcode-lookup
+cp deploy/env.production.example .env
+nano .env
+```
+
+Ensure `.env` includes:
+
+```dotenv
+GOOGLE_CLOUD_PROJECT=project-11d80abc-a7c0-43df-9ed
+REDIS_URL=redis://localhost:6379/0
+API_HOST=0.0.0.0
+API_PORT=8000
+```
+
+### C3. One-command native setup
+
+```bash
+bash deploy/setup-native.sh
+```
+
+This installs Redis, creates `.venv`, installs pip deps, and starts a `systemd` service.
+
+### C4. Open firewall for port 8000 (on your Mac, if not already)
+
+```bash
+gcloud compute firewall-rules create allow-pet-food-8000 \
+  --project=project-11d80abc-a7c0-43df-9ed \
+  --direction=INGRESS --action=ALLOW --rules=tcp:8000 \
+  --source-ranges=0.0.0.0/0 --target-tags=http-server
+```
+
+### C5. Test
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+Browser: `http://<VM_IP>:8000/`
+
+### C6. View logs (no Docker)
+
+```bash
+sudo journalctl -u pet-food-lookup -f          # live logs
+sudo journalctl -u pet-food-lookup -n 100        # last 100 lines
+sudo systemctl status pet-food-lookup
+sudo systemctl restart pet-food-lookup           # after .env change
+```
+
+### C7. Optional — nginx + HTTPS on `api.mindmycat.com`
+
+```bash
+DOMAIN=api.mindmycat.com SSL_EMAIL=you@mindmycat.com bash deploy/setup-native-nginx.sh
 ```
 
 ---
 
-## Tester URLs
+## Useful VM commands
 
-| URL | Purpose |
-|-----|---------|
-| `http://IP/` | Main UI |
-| `http://IP/?barcode=9003579008331` | Pre-filled lookup |
-| `http://IP/api/health` | API status |
+```bash
+# Reconnect
+gcloud compute ssh pet-food-lookup --zone=us-central1-a --project=project-11d80abc-a7c0-43df-9ed
+
+# Restart app after .env change
+cd ~/pet-food-barcode-lookup
+sudo docker compose up -d --build app
+
+# View logs
+sudo docker compose logs -f app
+
+# Stop everything
+sudo docker compose down
+```
 
 ---
 
-## Security notes for public demos
+## Manual Docker reference
 
-- Do **not** commit `.env` or `gcp-sa-key.json`
-- Rotate API keys after the demo period
-- Consider restricting firewall source ranges to your team's IPs if not fully public
-- Live lookups cost Vertex AI + SerpAPI credits — monitor usage in GCP/AWS consoles
+```bash
+cd ~/pet-food-barcode-lookup
+
+# IP demo (port 80)
+sudo docker compose up -d --build
+
+# Behind nginx (port 8000 localhost only)
+sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
 
 ---
 
@@ -171,8 +333,18 @@ curl http://localhost/api/health
 
 | Issue | Fix |
 |-------|-----|
-| `DefaultCredentialsError` on EC2 | Ensure `gcp-sa-key.json` exists and use `docker-compose.ec2.yml` |
-| `DefaultCredentialsError` on GCP | VM service account needs `roles/aiplatform.user` and `cloud-platform` scope |
-| Port 80 in use | Set `APP_PORT=8080` in `.env` and open that port in firewall |
-| Redis connection refused | `docker compose ps` — redis container should be healthy |
-| Slow first lookup | Normal — live Gemini + SerpAPI search takes 30–90s |
+| `DefaultCredentialsError` | VM service account needs `roles/aiplatform.user` + `cloud-platform` scope (Steps 4–5) |
+| `Permission denied` on `docker` | Run `newgrp docker` or log out/in; or prefix with `sudo` |
+| `git clone` fails (private repo) | Add VM deploy key to GitHub (Step 9) |
+| Port 80 already in use | `sudo docker compose down`; or use Path B with `APP_PORT=8000` |
+| Redis unhealthy | `sudo docker compose ps` — wait for redis healthcheck |
+| Slow lookup | Normal for live search — 30–90 seconds |
+| Firewall rule exists | Skip Step 6 — rule is already there |
+
+---
+
+## Security notes
+
+- Never commit `.env` or `gcp-sa-key.json`
+- Rotate API keys after the demo period
+- Live lookups bill Vertex AI + SerpAPI — monitor usage in GCP console

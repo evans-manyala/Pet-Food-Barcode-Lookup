@@ -1,0 +1,17 @@
+[Unit]
+Description=Pet Food Barcode Lookup API
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=%h/pet-food-barcode-lookup
+EnvironmentFile=%h/pet-food-barcode-lookup/.env
+ExecStart=%h/pet-food-barcode-lookup/.venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

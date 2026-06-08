@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure nginx + Let's Encrypt SSL for api.yourdomain.com
+# Configure nginx + Let's Encrypt SSL for api.mindmycat.com
 # Run on the VM after DNS A-record points to this server's public IP.
 #
 # Usage:
@@ -43,7 +43,7 @@ if [[ -z "$EMAIL" ]]; then
   echo "Then run:"
   echo "  sudo certbot --nginx -d $DOMAIN"
   echo ""
-  echo "Or re-run with: SSL_EMAIL=you@mydomain.com bash deploy/setup-domain.sh"
+  echo "Or re-run with: SSL_EMAIL=you@mindmycat.com bash deploy/setup-domain.sh"
 else
   echo "==> Requesting TLS certificate..."
   sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
