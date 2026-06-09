@@ -208,7 +208,6 @@ function renderRetailers(data) {
         <td class="price">${escapeHtml(r.price_display || `HK$${r.price}`)}</td>
         <td>${stockIcon(r.in_stock)}</td>
         <td><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></td>
-        <td class="notes">${escapeHtml(r.notes || "")}</td>
       </tr>
     `)
     .join("");
@@ -221,7 +220,6 @@ function renderRetailers(data) {
           <span class="retailer-card__price">${escapeHtml(r.price_display || `HK$${r.price}`)}</span>
         </div>
         <p class="retailer-card__meta">Stock: ${r.in_stock === true ? "In stock" : r.in_stock === false ? "Out of stock" : "Unknown"}</p>
-        ${r.notes ? `<p class="retailer-card__meta">${escapeHtml(r.notes)}</p>` : ""}
         <a class="retailer-card__link" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">View product ↗</a>
       </article>
     `)

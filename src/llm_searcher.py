@@ -480,22 +480,39 @@ class SerpApiBudget:
     Per-barcode SerpAPI budget guard.
 
     This prevents one lookup from consuming many free-plan searches. Defaults are:
+      - 2 Google AI Mode calls (identity rescue: global then HK)
+      - 2 Google Search calls (barcode identity fallback)
       - 1 Google Images call
       - 3 Google Search calls for HK retailers
-      - 4 total SerpAPI calls
+      - 7 total SerpAPI calls
 
     Override in .env if needed:
+      SERPAPI_AI_MODE_MAX_CALLS=2
+      SERPAPI_IDENTITY_SEARCH_MAX_CALLS=2
       SERPAPI_IMAGE_MAX_CALLS=1
       SERPAPI_HK_MAX_CALLS=3
-      SERPAPI_TOTAL_MAX_CALLS=4
+      SERPAPI_TOTAL_MAX_CALLS=7
     """
     def __init__(self) -> None:
         self.total_calls = 0
+        self.ai_mode_calls = 0
+        self.identity_search_calls = 0
         self.image_calls = 0
         self.hk_calls = 0
-        self.max_total = _env_int("SERPAPI_TOTAL_MAX_CALLS", 4)
+        self.max_total = _env_int("SERPAPI_TOTAL_MAX_CALLS", 7)
+        self.max_ai_mode = _env_int("SERPAPI_AI_MODE_MAX_CALLS", 2)
+        self.max_identity_search = _env_int("SERPAPI_IDENTITY_SEARCH_MAX_CALLS", 2)
         self.max_image = _env_int("SERPAPI_IMAGE_MAX_CALLS", 1)
         self.max_hk = _env_int("SERPAPI_HK_MAX_CALLS", 3)
+
+    def can_call_ai_mode(self) -> bool:
+        return self.total_calls < self.max_total and self.ai_mode_calls < self.max_ai_mode
+
+    def can_call_identity_search(self) -> bool:
+        return (
+            self.total_calls < self.max_total
+            and self.identity_search_calls < self.max_identity_search
+        )
 
     def can_call_image(self) -> bool:
         return self.total_calls < self.max_total and self.image_calls < self.max_image
@@ -503,25 +520,36 @@ class SerpApiBudget:
     def can_call_hk(self) -> bool:
         return self.total_calls < self.max_total and self.hk_calls < self.max_hk
 
-    def record_image(self) -> None:
-        self.total_calls += 1
-        self.image_calls += 1
+    def _log_budget(self) -> None:
         log.info(
-            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
+            "SerpAPI budget used: ai_mode=%d/%d identity_search=%d/%d "
+            "image=%d/%d hk=%d/%d total=%d/%d",
+            self.ai_mode_calls, self.max_ai_mode,
+            self.identity_search_calls, self.max_identity_search,
             self.image_calls, self.max_image,
             self.hk_calls, self.max_hk,
             self.total_calls, self.max_total,
         )
 
+    def record_ai_mode(self) -> None:
+        self.total_calls += 1
+        self.ai_mode_calls += 1
+        self._log_budget()
+
+    def record_identity_search(self) -> None:
+        self.total_calls += 1
+        self.identity_search_calls += 1
+        self._log_budget()
+
+    def record_image(self) -> None:
+        self.total_calls += 1
+        self.image_calls += 1
+        self._log_budget()
+
     def record_hk(self) -> None:
         self.total_calls += 1
         self.hk_calls += 1
-        log.info(
-            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
-            self.image_calls, self.max_image,
-            self.hk_calls, self.max_hk,
-            self.total_calls, self.max_total,
-        )
+        self._log_budget()
 
 
 def _serpapi_cache_enabled() -> bool:
@@ -1173,6 +1201,345 @@ def _serpapi_hk_product_page_candidates(
     if listings:
         _write_serpapi_cache("hk", barcode, product_name, payload)
     return listings[:max_results], result_notes
+
+
+_AI_MODE_EMPTY_PHRASES = (
+    "no response available",
+    "try asking something else",
+    "couldn't generate",
+    "something went wrong",
+    "can't help with that",
+)
+
+
+def _is_usable_ai_mode_facts(facts: str, urls: list[str]) -> bool:
+    """Reject SerpAPI AI Mode placeholder/error text that contains no product evidence."""
+    norm = (facts or "").strip().lower()
+    if not norm and not urls:
+        return False
+    if any(phrase in norm for phrase in _AI_MODE_EMPTY_PHRASES):
+        return False
+    if len(norm) < 80 and not urls:
+        return False
+    return True
+
+
+def _build_ai_mode_simple_query(barcode: str) -> str:
+    """Short query that matches manual browser AI Mode searches."""
+    return f"find the product with barcode {barcode} and its guaranteed analysis"
+
+
+def _format_serpapi_organic_results_as_facts(data: dict, query: str) -> tuple[str, list[str]]:
+    """Turn regular Google Search JSON into research text for Gemini extraction."""
+    parts = [f"SerpAPI Google Search query: {query}"]
+    urls: list[str] = []
+
+    for item in data.get("organic_results") or []:
+        title = (item.get("title") or "").strip()
+        link = (item.get("link") or "").strip()
+        snippet = (item.get("snippet") or "").strip()
+        if link:
+            urls.append(link)
+        if title or snippet or link:
+            parts.append(f"{title}\n{snippet}\n{link}".strip())
+
+    for block_name in ["shopping_results", "inline_shopping_results", "product_results"]:
+        block = data.get(block_name) or []
+        if isinstance(block, dict):
+            block = [block]
+        for item in block:
+            title = (item.get("title") or item.get("name") or "").strip()
+            link = (
+                item.get("link")
+                or item.get("product_link")
+                or item.get("serpapi_product_api")
+                or ""
+            ).strip()
+            snippet = " ".join(
+                str(item.get(k) or "")
+                for k in ["snippet", "description", "price", "extracted_price", "source"]
+            ).strip()
+            if link:
+                urls.append(link)
+            if title or snippet or link:
+                parts.append(f"{title}\n{snippet}\n{link}".strip())
+
+    kg = data.get("knowledge_graph") or {}
+    if isinstance(kg, dict) and kg:
+        kg_title = (kg.get("title") or "").strip()
+        kg_desc = (kg.get("description") or "").strip()
+        kg_link = ""
+        for key in ("website", "source", "link"):
+            val = kg.get(key)
+            if isinstance(val, dict):
+                kg_link = (val.get("link") or val.get("url") or "").strip()
+            elif isinstance(val, str):
+                kg_link = val.strip()
+            if kg_link:
+                break
+        if kg_link:
+            urls.append(kg_link)
+        if kg_title or kg_desc:
+            parts.append(f"Knowledge graph: {kg_title}\n{kg_desc}\n{kg_link}".strip())
+
+    facts = "\n\n".join(p for p in parts if p)
+    return facts, list(dict.fromkeys(urls))
+
+
+def _parse_serpapi_ai_mode_response(data: dict) -> tuple[str, list[str], str]:
+    """Extract research text, source URLs, and SerpAPI search id from AI Mode JSON."""
+    parts: list[str] = []
+
+    markdown = (data.get("reconstructed_markdown") or "").strip()
+    if markdown:
+        parts.append(markdown)
+
+    for block in data.get("text_blocks") or []:
+        snippet = (block.get("snippet") or "").strip()
+        if snippet:
+            parts.append(snippet)
+        for item in block.get("list") or []:
+            item_snippet = (item.get("snippet") or "").strip()
+            if item_snippet:
+                parts.append(item_snippet)
+        for row in block.get("table") or []:
+            if isinstance(row, list):
+                parts.append(" | ".join(str(cell) for cell in row if cell))
+
+    for qr in data.get("quick_results") or []:
+        title = (qr.get("title") or "").strip()
+        snippet = (qr.get("snippet") or "").strip()
+        link = (qr.get("link") or "").strip()
+        if title or snippet:
+            parts.append(f"{title}: {snippet}".strip(": "))
+        if link:
+            parts.append(link)
+
+    facts = "\n\n".join(p for p in parts if p)
+
+    urls: list[str] = []
+    for ref in data.get("references") or []:
+        link = (ref.get("link") or "").strip()
+        if link:
+            urls.append(link)
+        title = (ref.get("title") or "").strip()
+        snippet = (ref.get("snippet") or "").strip()
+        if title or snippet:
+            facts += f"\n\nSource: {title}\n{snippet}\n{link}"
+
+    search_id = str((data.get("search_metadata") or {}).get("id") or "")
+    return facts, list(dict.fromkeys(urls)), search_id
+
+
+def _serpapi_google_ai_mode_identity(
+    barcode: str,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> tuple[str, list[str], str]:
+    """
+    SerpAPI Google AI Mode — identity rescue when Vertex AI grounding finds nothing.
+    Tries a short global query first, then Hong Kong. Returns (facts_text, source_urls, search_id).
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI Google AI Mode skipped.")
+        return "", [], ""
+
+    if budget and not budget.can_call_ai_mode():
+        log.info("SerpAPI AI Mode budget exhausted; skipping identity rescue.")
+        return "", [], ""
+
+    cache_ttl = _env_int("SERPAPI_AI_MODE_CACHE_TTL", 24 * 3600)
+    cache_label = f"identity_{barcode}"
+
+    if use_cache:
+        cached = _read_serpapi_cache("ai_mode", barcode, cache_label, cache_ttl)
+        if isinstance(cached, dict):
+            facts = cached.get("facts") or ""
+            urls = cached.get("urls") or []
+            if _is_usable_ai_mode_facts(facts, urls):
+                return facts, urls, cached.get("search_id") or ""
+            log.info("SerpAPI AI Mode cache hit rejected (empty/error response); retrying live.")
+
+    query = _build_ai_mode_simple_query(barcode)
+    hk_location = os.getenv("SERPAPI_AI_MODE_LOCATION", "Hong Kong")
+    attempts = [
+        ("global", "us", "google.com", "United States"),
+        ("hk", "hk", "google.com.hk", hk_location),
+    ]
+
+    for label, gl, google_domain, location in attempts:
+        if budget and not budget.can_call_ai_mode():
+            log.info("SerpAPI AI Mode budget exhausted after %s attempt.", label)
+            break
+
+        try:
+            log.info(
+                "SerpAPI Google AI Mode identity query for barcode=%s (%s, %s)",
+                barcode, label, google_domain,
+            )
+            if budget:
+                budget.record_ai_mode()
+
+            resp = http_requests.get(
+                "https://serpapi.com/search",
+                params={
+                    "engine": "google_ai_mode",
+                    "q": query,
+                    "api_key": api_key,
+                    "hl": "en",
+                    "gl": gl,
+                    "google_domain": google_domain,
+                    "location": location,
+                    "device": "desktop",
+                },
+                timeout=90,
+            )
+            log.info("SerpAPI Google AI Mode HTTP %s (%s)", resp.status_code, label)
+            if resp.status_code >= 400:
+                log.warning("SerpAPI AI Mode error body (%s): %s", label, resp.text[:500])
+                continue
+
+            data = resp.json()
+            if data.get("error"):
+                log.warning("SerpAPI AI Mode API error (%s): %s", label, data.get("error"))
+                continue
+
+            facts, urls, search_id = _parse_serpapi_ai_mode_response(data)
+            log.info(
+                "SerpAPI Google AI Mode (%s): %d chars | %d URLs | search_id=%s",
+                label, len(facts), len(urls), search_id or "—",
+            )
+
+            if not _is_usable_ai_mode_facts(facts, urls):
+                log.warning(
+                    "SerpAPI AI Mode (%s) returned no usable product evidence for barcode=%s",
+                    label, barcode,
+                )
+                continue
+
+            _write_serpapi_cache("ai_mode", barcode, cache_label, {
+                "facts": facts,
+                "urls": urls,
+                "search_id": search_id,
+            })
+            return facts, urls, search_id
+
+        except Exception as exc:
+            log.warning("SerpAPI Google AI Mode identity search failed (%s): %s", label, exc)
+
+    return "", [], ""
+
+
+def _serpapi_google_barcode_search_identity(
+    barcode: str,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> tuple[str, list[str], str]:
+    """
+    Regular SerpAPI Google Search fallback when AI Mode returns nothing.
+    Returns (facts_text, source_urls, comma-separated search_ids).
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI barcode search skipped.")
+        return "", [], ""
+
+    if budget and not budget.can_call_identity_search():
+        log.info("SerpAPI identity-search budget exhausted; skipping barcode fallback.")
+        return "", [], ""
+
+    cache_ttl = _env_int("SERPAPI_IDENTITY_SEARCH_CACHE_TTL", 24 * 3600)
+    cache_label = f"search_{barcode}"
+
+    if use_cache:
+        cached = _read_serpapi_cache("identity", barcode, cache_label, cache_ttl)
+        if isinstance(cached, dict):
+            facts = cached.get("facts") or ""
+            urls = cached.get("urls") or []
+            if facts or urls:
+                return facts, urls, cached.get("search_id") or ""
+
+    queries = [f'"{barcode}"', f'"{barcode}" pet food']
+    attempts = [
+        ("global", "us", "google.com", "United States"),
+        ("hk", "hk", "google.com.hk", os.getenv("SERPAPI_AI_MODE_LOCATION", "Hong Kong")),
+    ]
+
+    merged_facts: list[str] = []
+    merged_urls: list[str] = []
+    search_ids: list[str] = []
+
+    for label, gl, google_domain, location in attempts:
+        for query in queries:
+            if budget and not budget.can_call_identity_search():
+                log.info("SerpAPI identity-search budget exhausted.")
+                break
+
+            try:
+                log.info(
+                    "SerpAPI barcode search for barcode=%s (%s): %s",
+                    barcode, label, query,
+                )
+                if budget:
+                    budget.record_identity_search()
+
+                resp = http_requests.get(
+                    "https://serpapi.com/search",
+                    params={
+                        "engine": "google",
+                        "q": query,
+                        "api_key": api_key,
+                        "hl": "en",
+                        "gl": gl,
+                        "google_domain": google_domain,
+                        "location": location,
+                        "num": 10,
+                    },
+                    timeout=45,
+                )
+                log.info("SerpAPI barcode search HTTP %s (%s)", resp.status_code, label)
+                if resp.status_code >= 400:
+                    log.warning("SerpAPI barcode search error body (%s): %s", label, resp.text[:500])
+                    continue
+
+                data = resp.json()
+                if data.get("error"):
+                    log.warning("SerpAPI barcode search API error (%s): %s", label, data.get("error"))
+                    continue
+
+                facts, urls = _format_serpapi_organic_results_as_facts(data, query)
+                search_id = str((data.get("search_metadata") or {}).get("id") or "")
+                if search_id:
+                    search_ids.append(search_id)
+                if facts:
+                    merged_facts.append(facts)
+                merged_urls.extend(urls)
+
+                if merged_urls:
+                    break
+            except Exception as exc:
+                log.warning("SerpAPI barcode search failed (%s, %s): %s", label, query, exc)
+
+        if merged_urls:
+            break
+
+    facts_text = "\n\n---\n\n".join(merged_facts)
+    unique_urls = list(dict.fromkeys(merged_urls))
+    search_id_text = ",".join(search_ids)
+
+    if facts_text or unique_urls:
+        _write_serpapi_cache("identity", barcode, cache_label, {
+            "facts": facts_text,
+            "urls": unique_urls,
+            "search_id": search_id_text,
+        })
+
+    log.info(
+        "SerpAPI barcode search: %d chars | %d URLs | search_ids=%s",
+        len(facts_text), len(unique_urls), search_id_text or "—",
+    )
+    return facts_text, unique_urls, search_id_text
 
 
 def _gemini_vision_verify_product_image(
@@ -2430,7 +2797,11 @@ class ProductSearcher:
             and bool(data.get("product_name"))
         )
 
-    def _fetch_product_info(self, barcode: str) -> tuple[dict, str]:
+    def _fetch_product_info(
+        self,
+        barcode: str,
+        serpapi_budget: SerpApiBudget | None = None,
+    ) -> tuple[dict, str]:
         log.info("Phase 1 – exact product identity verification (barcode=%s) …", barcode)
 
         facts_1, urls_1, _ = self._grounded_search(
@@ -2478,6 +2849,55 @@ class ProductSearcher:
         merged_facts = facts_1 + "\n\n--- RESCUE SEARCH ---\n\n" + facts_2
         merged_urls = list(dict.fromkeys(urls_1 + urls_2))
         data = self._extract_product_json(barcode, merged_facts, merged_urls)
+
+        if self._is_verified(data):
+            return data, merged_facts
+
+        # ── SerpAPI Google AI Mode identity rescue ────────────────────────────
+        log.warning(
+            "Vertex AI grounding could not verify barcode %s. "
+            "Trying SerpAPI Google AI Mode identity rescue …",
+            barcode,
+        )
+        ai_facts, ai_urls, search_id = _serpapi_google_ai_mode_identity(
+            barcode,
+            budget=serpapi_budget,
+        )
+        if ai_facts or ai_urls:
+            ai_section = ai_facts
+            if search_id:
+                ai_section = f"SerpAPI Google AI Mode search_id={search_id}\n\n{ai_facts}"
+            merged_facts = (
+                merged_facts
+                + "\n\n--- SERPAPI GOOGLE AI MODE ---\n\n"
+                + ai_section
+            )
+            merged_urls = list(dict.fromkeys(merged_urls + ai_urls))
+            data = self._extract_product_json(barcode, merged_facts, merged_urls)
+
+        if not self._is_verified(data):
+            log.warning(
+                "SerpAPI AI Mode could not verify barcode %s. "
+                "Trying SerpAPI Google Search barcode fallback …",
+                barcode,
+            )
+            search_facts, search_urls, search_ids = _serpapi_google_barcode_search_identity(
+                barcode,
+                budget=serpapi_budget,
+            )
+            if search_facts or search_urls:
+                search_section = search_facts
+                if search_ids:
+                    search_section = (
+                        f"SerpAPI Google Search search_ids={search_ids}\n\n{search_facts}"
+                    )
+                merged_facts = (
+                    merged_facts
+                    + "\n\n--- SERPAPI GOOGLE BARCODE SEARCH ---\n\n"
+                    + search_section
+                )
+                merged_urls = list(dict.fromkeys(merged_urls + search_urls))
+                data = self._extract_product_json(barcode, merged_facts, merged_urls)
 
         if not self._is_verified(data):
             warnings = data.get("warnings") or []
@@ -3258,7 +3678,7 @@ Rules:
         serpapi_budget = SerpApiBudget()
 
         # ── Phase 1: GLOBAL product identity ──────────────────────
-        prod_data, raw_facts = self._fetch_product_info(barcode)
+        prod_data, raw_facts = self._fetch_product_info(barcode, serpapi_budget=serpapi_budget)
 
         if not self._is_verified(prod_data):
             return ProductInfo(

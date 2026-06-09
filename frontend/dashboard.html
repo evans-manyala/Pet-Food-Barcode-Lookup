@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pet Food Lookup — Monitoring</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2d3252;
+  --text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--green:#22c55e;
+  --red:#ef4444;--yellow:#f59e0b;--purple:#a78bfa;
+  --font:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;min-height:100vh}
+.shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+.nav{background:var(--surface);border-right:1px solid var(--border);padding:24px 0;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.nav-brand{padding:0 20px 24px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.nav-brand h1{font-size:15px;font-weight:700}
+.nav-brand span{font-size:11px;color:var(--muted);display:block;margin-top:2px}
+.nav-link{display:flex;align-items:center;gap:8px;padding:8px 20px;color:var(--muted);text-decoration:none;font-size:13px;border-left:2px solid transparent;transition:all .15s}
+.nav-link:hover{color:var(--text);background:var(--surface2);border-left-color:var(--accent)}
+.nav-footer{margin-top:auto;padding:16px 20px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+#refresh-indicator{display:inline-flex;align-items:center;gap:5px}
+#refresh-indicator .dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.main{padding:28px 32px;overflow-y:auto}
+.section-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:32px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+.kpi-label{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+.kpi-value{font-size:28px;font-weight:700;line-height:1}
+.kpi-sub{font-size:11px;color:var(--muted);margin-top:5px}
+.kpi-value.green{color:var(--green)}.kpi-value.red{color:var(--red)}.kpi-value.yellow{color:var(--yellow)}.kpi-value.accent{color:var(--accent)}
+.charts-row{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:32px}
+.chart-card,.table-card,.recent-card,.sys-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px}
+.chart-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.chart-sub{font-size:11px;color:var(--muted);margin-bottom:16px}
+.chart-wrap{position:relative;height:180px}
+.tables-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:32px}
+.table-card table,.recent-card table{width:100%;border-collapse:collapse}
+.table-card th,.recent-card th{font-size:11px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.06em;text-align:left;padding:0 0 10px}
+.table-card td,.recent-card td{padding:8px 0;border-top:1px solid var(--border);font-size:12px;vertical-align:middle}
+.table-card td:last-child{text-align:right;color:var(--muted)}
+.recent-card{margin-bottom:32px}
+.badge{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.ok{background:rgba(34,197,94,.15);color:var(--green)}
+.badge.fail{background:rgba(239,68,68,.15);color:var(--red)}
+.badge.cache{background:rgba(167,139,250,.15);color:var(--purple)}
+.tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--surface2);color:var(--muted);margin-left:4px}
+.mono{font-family:ui-monospace,monospace}
+.controls{display:flex;align-items:center;gap:8px;margin-bottom:24px;flex-wrap:wrap}
+.controls label{font-size:12px;color:var(--muted)}
+.controls select,.btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer}
+.btn{padding:5px 14px}.btn:hover{border-color:var(--accent)}
+.empty{color:var(--muted);font-size:13px;padding:16px 0;text-align:center}
+.sys-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:32px}
+.sys-item{background:var(--surface2);border-radius:8px;padding:12px 14px;text-align:center}
+.sys-item .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.sys-item .val{font-size:16px;font-weight:700;margin-top:4px}
+.sys-item .val.up{color:var(--green)}.sys-item .val.down{color:var(--red)}
+.nav-link-ext{margin-top:8px;padding:8px 20px;font-size:12px;color:var(--accent);text-decoration:none}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.nav{display:none}.kpi-grid,.sys-grid{grid-template-columns:repeat(2,1fr)}.charts-row,.tables-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="nav">
+    <div class="nav-brand">
+      <h1>Pet Food Lookup</h1>
+      <span>Monitoring Dashboard</span>
+    </div>
+    <a class="nav-link" href="#overview">Overview</a>
+    <a class="nav-link" href="#system">System Health</a>
+    <a class="nav-link" href="#failures">Failures</a>
+    <a class="nav-link" href="#providers">Data Sources</a>
+    <a class="nav-link" href="#activity">Recent Activity</a>
+    <a class="nav-link-ext" href="/">← Back to Lookup</a>
+    <div class="nav-footer">
+      <div id="refresh-indicator"><span class="dot"></span> Live · auto-refresh 30s</div>
+      <div style="margin-top:6px" id="last-updated">—</div>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="controls">
+      <label for="window-select">Time window</label>
+      <select id="window-select">
+        <option value="1">Last 1 hour</option>
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="48">Last 48 hours</option>
+        <option value="168">Last 7 days</option>
+      </select>
+      <button class="btn" id="refresh-btn">Refresh now</button>
+      <span id="loading-text" style="font-size:12px;color:var(--muted);display:none">Loading…</span>
+    </div>
+
+    <div class="sys-grid" id="system">
+      <div class="sys-item"><div class="label">Redis</div><div class="val" id="sys-redis">—</div></div>
+      <div class="sys-item"><div class="label">Pinecone</div><div class="val" id="sys-pinecone">—</div></div>
+      <div class="sys-item"><div class="label">Uptime</div><div class="val accent" id="sys-uptime">—</div></div>
+      <div class="sys-item"><div class="label">Events buffered</div><div class="val accent" id="sys-events">—</div></div>
+    </div>
+
+    <div class="kpi-grid" id="overview">
+      <div class="kpi"><div class="kpi-label">Total Searches</div><div class="kpi-value accent" id="kpi-total">—</div><div class="kpi-sub" id="kpi-window">—</div></div>
+      <div class="kpi"><div class="kpi-label">Success Rate</div><div class="kpi-value" id="kpi-success-rate">—</div><div class="kpi-sub" id="kpi-success-abs">—</div></div>
+      <div class="kpi"><div class="kpi-label">Avg Response</div><div class="kpi-value accent" id="kpi-avg-ms">—</div><div class="kpi-sub" id="kpi-avg-ok">—</div></div>
+      <div class="kpi"><div class="kpi-label">Cache Hit Rate</div><div class="kpi-value" id="kpi-cache">—</div><div class="kpi-sub" id="kpi-extras">—</div></div>
+    </div>
+
+    <div class="charts-row">
+      <div class="chart-card">
+        <div class="chart-title">Search Volume</div>
+        <div class="chart-sub">Lookups per time bucket — success vs failure</div>
+        <div class="chart-wrap"><canvas id="volume-chart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Outcome Split</div>
+        <div class="chart-sub">Success / failure breakdown</div>
+        <div class="chart-wrap"><canvas id="donut-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="tables-row" id="failures">
+      <div class="table-card">
+        <div class="section-title">Failure Reasons</div>
+        <table><thead><tr><th>Error type</th><th>Count</th></tr></thead><tbody id="failure-tbody"></tbody></table>
+      </div>
+      <div class="table-card" id="providers">
+        <div class="section-title">Data Source Performance</div>
+        <table><thead><tr><th>Source</th><th>Calls</th><th>Avg ms</th></tr></thead><tbody id="provider-tbody"></tbody></table>
+      </div>
+    </div>
+
+    <div class="tables-row">
+      <div class="table-card">
+        <div class="section-title">Top Failing Barcodes</div>
+        <table><thead><tr><th>Barcode</th><th>Fails</th><th>Errors</th></tr></thead><tbody id="topfail-tbody"></tbody></table>
+      </div>
+      <div class="table-card">
+        <div class="section-title">Lookup Features</div>
+        <table><thead><tr><th>Feature</th><th>Count</th></tr></thead><tbody id="features-tbody"></tbody></table>
+      </div>
+    </div>
+
+    <div class="recent-card" id="activity">
+      <div class="section-title">Recent Activity <span style="font-weight:400;text-transform:none">(last 50)</span></div>
+      <table>
+        <thead><tr><th>Time (UTC)</th><th>Barcode</th><th>Status</th><th>Product</th><th>Source</th><th>ms</th></tr></thead>
+        <tbody id="recent-tbody"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+let volumeChart=null,donutChart=null,autoTimer=null;
+const COLORS={green:'rgba(34,197,94,1)',greenA:'rgba(34,197,94,.18)',red:'rgba(239,68,68,1)',redA:'rgba(239,68,68,.18)'};
+Chart.defaults.color='#94a3b8';Chart.defaults.borderColor='#2d3252';Chart.defaults.font.family="'Inter',sans-serif";Chart.defaults.font.size=11;
+
+const ERROR_LABELS={invalid_barcode:'Invalid barcode',not_found:'Product not found',unverified:'Unverified product',llm_error:'LLM / Vertex AI error',server_error:'Server error',service_unavailable:'Service unavailable',unknown:'Unknown'};
+
+function pct(n,t){return t?(n/t*100).toFixed(1)+'%':'—'}
+function ms(n){return n>=1000?(n/1000).toFixed(1)+'s':n+'ms'}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function colorRate(el,val){el.classList.remove('green','red','yellow','accent');if(val>=95)el.classList.add('green');else if(val>=80)el.classList.add('yellow');else el.classList.add('red')}
+
+function buildVolumeChart(data){
+  const ctx=document.getElementById('volume-chart').getContext('2d');
+  if(volumeChart)volumeChart.destroy();
+  volumeChart=new Chart(ctx,{type:'bar',data:{labels:data.map(d=>d.label),datasets:[
+    {label:'Success',data:data.map(d=>d.successes),backgroundColor:COLORS.greenA,borderColor:COLORS.green,borderWidth:1,stack:'s'},
+    {label:'Failure',data:data.map(d=>d.failures),backgroundColor:COLORS.redA,borderColor:COLORS.red,borderWidth:1,stack:'s'}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'top',labels:{boxWidth:10}}},scales:{x:{grid:{color:'rgba(45,50,82,.5)'}},y:{beginAtZero:true,ticks:{stepSize:1}}}}});
+}
+
+function buildDonutChart(s,f){
+  const ctx=document.getElementById('donut-chart').getContext('2d');
+  if(donutChart)donutChart.destroy();
+  if(!s&&!f){s=1;f=0}
+  donutChart=new Chart(ctx,{type:'doughnut',data:{labels:['Success','Failure'],datasets:[{data:[s,f],backgroundColor:[COLORS.green,COLORS.red],borderColor:'#1a1d27',borderWidth:3}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{position:'bottom'}}}});
+}
+
+function renderSystem(sys,s){
+  const set=(id,val,cls)=>{const el=document.getElementById(id);el.textContent=val;el.className='val '+(cls||'accent')};
+  set('sys-redis',sys.redis,sys.redis==='up'?'up':'down');
+  set('sys-pinecone',sys.pinecone,sys.pinecone==='up'?'up':'down');
+  const h=Math.floor(s.uptime_seconds/3600),m=Math.floor((s.uptime_seconds%3600)/60);
+  set('sys-uptime',h?`${h}h ${m}m`:`${m}m`);
+  set('sys-events',sys.events_buffered);
+}
+
+function renderKPIs(s){
+  document.getElementById('kpi-total').textContent=s.total.toLocaleString();
+  document.getElementById('kpi-window').textContent=`Last ${s.window_hours}h`;
+  const rateEl=document.getElementById('kpi-success-rate');
+  rateEl.textContent=s.success_rate+'%';colorRate(rateEl,s.success_rate);
+  document.getElementById('kpi-success-abs').textContent=`${s.successes} ok · ${s.failures} failed`;
+  document.getElementById('kpi-avg-ms').textContent=ms(s.avg_response_ms);
+  document.getElementById('kpi-avg-ok').textContent=`Success only: ${ms(s.avg_response_ms_ok)}`;
+  const cacheEl=document.getElementById('kpi-cache');
+  cacheEl.textContent=s.cache_hit_rate+'%';colorRate(cacheEl,s.cache_hit_rate);
+  document.getElementById('kpi-extras').textContent=`${s.with_image} with photo · ${s.with_retailers} with HK prices`;
+}
+
+function renderFailures(rows){
+  const tb=document.getElementById('failure-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="2" class="empty">No failures in window</td></tr>';return}
+  tb.innerHTML=rows.map(r=>`<tr><td>${ERROR_LABELS[r.error_type]||r.error_type}${r.samples?`<div style="font-size:10px;color:var(--muted);margin-top:2px">${esc(r.samples.split(',')[0])}</div>`:''}</td><td>${r.count}</td></tr>`).join('');
+}
+
+function renderProviders(rows){
+  const tb=document.getElementById('provider-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="3" class="empty">No data yet</td></tr>';return}
+  tb.innerHTML=rows.map(r=>`<tr><td><strong>${r.provider}</strong><div style="font-size:10px;color:var(--muted)">${pct(r.successes,r.calls)} success</div></td><td>${r.calls}</td><td>${ms(r.avg_ms)} <span style="font-size:10px;color:var(--muted)">(max ${ms(r.max_ms)})</span></td></tr>`).join('');
+}
+
+function renderTopFail(rows){
+  const tb=document.getElementById('topfail-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="3" class="empty">No failures</td></tr>';return}
+  tb.innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.barcode)}</td><td>${r.attempts}</td><td style="font-size:11px;color:var(--muted)">${r.error_types||'—'}</td></tr>`).join('');
+}
+
+function renderFeatures(s){
+  document.getElementById('features-tbody').innerHTML=[
+    ['Products with image',s.with_image],
+    ['HK retailer prices found',s.with_retailers],
+    ['Unverified lookups',s.unverified],
+    ['Force-refresh requests',s.force_refresh],
+    ['Verification warnings',s.warnings],
+  ].map(([l,v])=>`<tr><td>${l}</td><td>${v}</td></tr>`).join('');
+}
+
+function renderRecent(rows){
+  const tb=document.getElementById('recent-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="6" class="empty">No activity yet — run some lookups on the main app</td></tr>';return}
+  tb.innerHTML=rows.map(r=>{
+    const badge=r.success?(r.cache_hit?'<span class="badge cache">Cached</span>':'<span class="badge ok">OK</span>'):`<span class="badge fail">${ERROR_LABELS[r.error_type]||r.error_type||'fail'}</span>`;
+    const tags=[r.provider?`<span class="tag">${r.provider}</span>`:'',r.has_image?'<span class="tag">img</span>':'',r.force_refresh?'<span class="tag">refresh</span>':'',r.unverified?'<span class="tag" style="color:var(--yellow)">unverified</span>':''].join('');
+    return `<tr><td style="color:var(--muted)">${r.ts_iso.replace('T',' ').substring(0,19)}</td><td class="mono">${r.barcode_display}</td><td>${badge}</td><td>${esc(r.product_name||(r.success?'':'—'))}</td><td>${tags}</td><td style="color:var(--muted)">${ms(r.response_ms)}</td></tr>`;
+  }).join('');
+}
+
+async function loadStats(){
+  const hours=document.getElementById('window-select').value;
+  document.getElementById('loading-text').style.display='inline';
+  try{
+    const token=new URLSearchParams(location.search).get('token')||'';
+    const q=new URLSearchParams({hours});
+    if(token)q.set('token',token);
+    const resp=await fetch(`/api/stats?${q}`);
+    if(!resp.ok)throw new Error(`HTTP ${resp.status}`);
+    const data=await resp.json();
+    renderSystem(data.system,data.summary);
+    renderKPIs(data.summary);
+    buildVolumeChart(data.hourly_volume);
+    buildDonutChart(data.summary.successes,data.summary.failures);
+    renderFailures(data.failure_breakdown);
+    renderProviders(data.provider_stats);
+    renderTopFail(data.top_failing);
+    renderFeatures(data.summary);
+    renderRecent(data.recent);
+    document.getElementById('last-updated').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){console.error(e);document.getElementById('recent-tbody').innerHTML=`<tr><td colspan="6" class="empty">Failed to load stats: ${esc(e.message)}</td></tr>`}
+  finally{document.getElementById('loading-text').style.display='none'}
+}
+
+document.getElementById('window-select').addEventListener('change',loadStats);
+document.getElementById('refresh-btn').addEventListener('click',loadStats);
+loadStats();
+setInterval(loadStats,30000);
+</script>
+</body>
+</html>

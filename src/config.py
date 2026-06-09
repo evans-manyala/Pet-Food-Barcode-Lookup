@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_reload: bool = False
+    stats_token: str = ""  # optional: protect /api/stats and /dashboard?token=
 
 
 @lru_cache(maxsize=1)
