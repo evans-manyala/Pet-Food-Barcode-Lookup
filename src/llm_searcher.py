@@ -15,11 +15,13 @@ Pipeline
 --------
   Step 1  Global exact barcode product identity search
           - Product name/brand/animal/size require barcode/SKU evidence
+          - Local HK catalog (HKTVmall URL barcode index) supplements rescue
   Step 2  Global nutrition search
           - Manufacturer, brand, distributor, catalog, retailer, or label evidence
   Step 3  Global product image search
           - Any reliable source; rejects logos/placeholders/icons/tiny images
   Step 4  Hong Kong retailer search only
+          - Local scraped catalog first, then SerpAPI + Gemini grounding
           - Direct buy URL + visible HKD price required
   Step 5  Save only verified product identity to Redis/Pinecone
 """
@@ -48,10 +50,37 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
+from .catalog import get_catalog_store
 from .config import get_settings
 from .models import ProductInfo, NutritionalInfo, RetailerListing
+from .timing import (
+    LookupTimer,
+    activate_lookup_timer,
+    deactivate_lookup_timer,
+    get_lookup_timer,
+)
 
 log = logging.getLogger(__name__)
+
+_RETAILER_META_KEYS = frozenset({"catalog_trusted", "catalog_source"})
+
+
+def _timed_http_get(*args, **kwargs):
+    """SerpAPI / external search HTTP with pipeline timing."""
+    timer = get_lookup_timer()
+    if timer:
+        with timer.measure("serpapi"):
+            return http_requests.get(*args, **kwargs)
+    return http_requests.get(*args, **kwargs)
+
+
+def _timed_url_validation_get(*args, **kwargs):
+    timer = get_lookup_timer()
+    if timer:
+        with timer.measure("url_validation"):
+            return http_requests.get(*args, **kwargs)
+    return http_requests.get(*args, **kwargs)
+
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -480,22 +509,39 @@ class SerpApiBudget:
     Per-barcode SerpAPI budget guard.
 
     This prevents one lookup from consuming many free-plan searches. Defaults are:
+      - 2 Google AI Mode calls (identity rescue: global then HK)
+      - 2 Google Search calls (barcode identity fallback)
       - 1 Google Images call
       - 3 Google Search calls for HK retailers
-      - 4 total SerpAPI calls
+      - 7 total SerpAPI calls
 
     Override in .env if needed:
+      SERPAPI_AI_MODE_MAX_CALLS=2
+      SERPAPI_IDENTITY_SEARCH_MAX_CALLS=2
       SERPAPI_IMAGE_MAX_CALLS=1
       SERPAPI_HK_MAX_CALLS=3
-      SERPAPI_TOTAL_MAX_CALLS=4
+      SERPAPI_TOTAL_MAX_CALLS=7
     """
     def __init__(self) -> None:
         self.total_calls = 0
+        self.ai_mode_calls = 0
+        self.identity_search_calls = 0
         self.image_calls = 0
         self.hk_calls = 0
-        self.max_total = _env_int("SERPAPI_TOTAL_MAX_CALLS", 4)
+        self.max_total = _env_int("SERPAPI_TOTAL_MAX_CALLS", 7)
+        self.max_ai_mode = _env_int("SERPAPI_AI_MODE_MAX_CALLS", 2)
+        self.max_identity_search = _env_int("SERPAPI_IDENTITY_SEARCH_MAX_CALLS", 2)
         self.max_image = _env_int("SERPAPI_IMAGE_MAX_CALLS", 1)
         self.max_hk = _env_int("SERPAPI_HK_MAX_CALLS", 3)
+
+    def can_call_ai_mode(self) -> bool:
+        return self.total_calls < self.max_total and self.ai_mode_calls < self.max_ai_mode
+
+    def can_call_identity_search(self) -> bool:
+        return (
+            self.total_calls < self.max_total
+            and self.identity_search_calls < self.max_identity_search
+        )
 
     def can_call_image(self) -> bool:
         return self.total_calls < self.max_total and self.image_calls < self.max_image
@@ -503,25 +549,36 @@ class SerpApiBudget:
     def can_call_hk(self) -> bool:
         return self.total_calls < self.max_total and self.hk_calls < self.max_hk
 
-    def record_image(self) -> None:
-        self.total_calls += 1
-        self.image_calls += 1
+    def _log_budget(self) -> None:
         log.info(
-            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
+            "SerpAPI budget used: ai_mode=%d/%d identity_search=%d/%d "
+            "image=%d/%d hk=%d/%d total=%d/%d",
+            self.ai_mode_calls, self.max_ai_mode,
+            self.identity_search_calls, self.max_identity_search,
             self.image_calls, self.max_image,
             self.hk_calls, self.max_hk,
             self.total_calls, self.max_total,
         )
 
+    def record_ai_mode(self) -> None:
+        self.total_calls += 1
+        self.ai_mode_calls += 1
+        self._log_budget()
+
+    def record_identity_search(self) -> None:
+        self.total_calls += 1
+        self.identity_search_calls += 1
+        self._log_budget()
+
+    def record_image(self) -> None:
+        self.total_calls += 1
+        self.image_calls += 1
+        self._log_budget()
+
     def record_hk(self) -> None:
         self.total_calls += 1
         self.hk_calls += 1
-        log.info(
-            "SerpAPI budget used: image=%d/%d hk=%d/%d total=%d/%d",
-            self.image_calls, self.max_image,
-            self.hk_calls, self.max_hk,
-            self.total_calls, self.max_total,
-        )
+        self._log_budget()
 
 
 def _serpapi_cache_enabled() -> bool:
@@ -573,20 +630,120 @@ def _write_serpapi_cache(kind: str, barcode: str, product_name: str, data) -> No
         log.debug("SerpAPI cache write failed for %s: %s", path, exc)
 
 
+def _verified_brand_in_text(brand: str | None, *texts: str) -> bool:
+    """True when the verified brand appears as its own token, not as a substring."""
+    brand_norm = _normalise_match_text(brand or "")
+    if len(brand_norm) < 3:
+        return False
+    combined = _normalise_match_text(" ".join(t for t in texts if t))
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(brand_norm)}(?![a-z0-9])", combined))
+
+
+def _image_conflicting_brand_penalty(brand: str | None, title: str, source_url: str) -> int:
+    """
+    Penalize image metadata that looks like a different brand with similar wording.
+
+    Example: verified brand "Naturea" vs Google result title "Nature's Recipe …".
+    """
+    if _verified_brand_in_text(brand, title, source_url):
+        return 0
+
+    brand_norm = _normalise_match_text(brand or "")
+    if len(brand_norm) < 3:
+        return 0
+
+    title_norm = _normalise_match_text(title)
+    lead = title_norm.split("|")[0].split("-")[0].strip()
+    text = _normalise_match_text(f"{title} {source_url}")
+
+    penalty = 40
+    if lead and brand_norm not in lead and len(lead) >= 4:
+        penalty += 35
+
+    # Similar-prefix competing brands (Naturea vs Nature's Recipe).
+    if brand_norm[:4] in text and "recipe" in text:
+        penalty += 80
+
+    productish = any(w in text for w in ("food", "wet", "dry", "dog", "cat", "treat", "can", "pouch"))
+    if productish and brand_norm not in text:
+        penalty += 25
+
+    return penalty
+
+
+def _image_candidate_prefilter_score(
+    candidate: dict,
+    product_name: str,
+    brand: str,
+    barcode: str,
+) -> int:
+    """Lightweight SerpAPI metadata score used to rank before image download."""
+    title = str(candidate.get("title") or "")
+    source_url = str(candidate.get("source_url") or "")
+    image_url = str(candidate.get("image_url") or "")
+    score = _image_positive_product_score(image_url, title, source_url, product_name, brand, barcode)
+    score -= _image_conflicting_brand_penalty(brand, title, source_url)
+
+    if _verified_brand_in_text(brand, title, source_url):
+        score += 60
+        try:
+            position = int(candidate.get("position") or 0)
+        except Exception:
+            position = 0
+        if position == 1:
+            score += 20
+        elif 2 <= position <= 5:
+            score += 10
+
+    return score
+
+
+def _rank_image_candidates(
+    candidates: list[dict],
+    product_name: str,
+    brand: str,
+    barcode: str,
+) -> list[dict]:
+    """Sort SerpAPI image hits by brand-aware metadata score instead of Google rank."""
+    if not candidates:
+        return candidates
+    ranked = sorted(
+        candidates,
+        key=lambda c: _image_candidate_prefilter_score(c, product_name, brand, barcode),
+        reverse=True,
+    )
+    return ranked
+
+
 def _build_image_queries(product_name: str, brand: str, barcode: str) -> list[str]:
     """Staged image queries. Usually only the first query runs because of budget."""
     clean_product = re.sub(r"\s+", " ", product_name or "").strip()
     clean_brand = re.sub(r"\s+", " ", brand or "").strip()
     clean_barcode = re.sub(r"\D", "", barcode or "")
 
+    tokens = _identity_tokens(clean_product, clean_brand)
+    generic_query_stop = _GENERIC_STOPWORDS | {"brand", "image", "package"}
+    brand_norm = _normalise_match_text(clean_brand)
+    distinctive = [
+        t for t in tokens
+        if t not in generic_query_stop and t != brand_norm
+    ][:5]
+    distinctive_query = " ".join(f'"{t}"' for t in distinctive)
+
     queries = []
-    if clean_product and clean_brand:
-        queries.append(f'"{clean_product}" "{clean_brand}" product image')
+    if clean_brand and clean_product:
+        # Brand first: avoids Google matching similar generic product names.
+        queries.append(f'"{clean_brand}" "{clean_product}" package')
+        queries.append(f'"{clean_brand}" "{clean_product}" product image')
     elif clean_product:
         queries.append(f'"{clean_product}" product image')
 
-    # Fallback only if budget allows more than one image query.
-    if clean_barcode and clean_product:
+    if clean_brand and distinctive_query:
+        queries.append(f'"{clean_brand}" {distinctive_query} pet food')
+
+    if clean_barcode and clean_brand:
+        queries.append(f'"{clean_barcode}" "{clean_brand}" image')
+    elif clean_barcode and clean_product:
         queries.append(f'"{clean_barcode}" "{clean_product}" image')
 
     return list(dict.fromkeys(q for q in queries if q.strip()))
@@ -653,10 +810,11 @@ def _serpapi_google_image_candidates(
         return []
 
     max_results = max_results or _env_int("SERPAPI_IMAGE_MAX_CANDIDATES", 20)
+    scan_limit = _env_int("SERPAPI_IMAGE_SCAN_RESULTS", 40)
     cache_ttl = _env_int("SERPAPI_IMAGE_CACHE_TTL", 7 * 86400)
 
     if use_cache:
-        cached = _read_serpapi_cache("image", barcode, product_name, cache_ttl)
+        cached = _read_serpapi_cache("image_v2", barcode, product_name, cache_ttl)
         if isinstance(cached, list):
             return cached[:max_results]
 
@@ -682,7 +840,7 @@ def _serpapi_google_image_candidates(
                 budget.record_image()
             calls_made += 1
 
-            resp = http_requests.get(
+            resp = _timed_http_get(
                 "https://serpapi.com/search",
                 params={
                     "engine": "google_images",
@@ -709,6 +867,8 @@ def _serpapi_google_image_candidates(
             log.info("SerpAPI image results count: %d", len(results))
 
             for pos, item in enumerate(results, start=1):
+                if pos > scan_limit:
+                    break
                 image_url = item.get("original") or item.get("thumbnail")
                 source_url = item.get("link") or item.get("source_page") or item.get("original")
                 if not image_url or image_url in seen:
@@ -723,7 +883,7 @@ def _serpapi_google_image_candidates(
                     "query": query,
                     "provider": "serpapi_google_images",
                 })
-                if len(candidates) >= max_results:
+                if len(candidates) >= scan_limit:
                     break
 
             # Early stop: if one query gave candidates, let Python/Gemini validation decide.
@@ -734,9 +894,9 @@ def _serpapi_google_image_candidates(
         except Exception as exc:
             log.warning("SerpAPI image search failed for query=%s: %s", query, exc)
 
-    candidates = candidates[:max_results]
+    candidates = _rank_image_candidates(candidates, product_name, brand, barcode)[:max_results]
     if candidates:
-        _write_serpapi_cache("image", barcode, product_name, candidates)
+        _write_serpapi_cache("image_v2", barcode, product_name, candidates)
     log.info("SerpAPI image candidates collected: %d", len(candidates))
     return candidates
 
@@ -809,12 +969,18 @@ def _image_positive_product_score(
     tokens = _identity_tokens(product_name, brand)
     score = 0
 
-    brand_norm = _normalise_match_text(brand)
-    if brand_norm and brand_norm in text:
-        score += 25
+    has_brand = _verified_brand_in_text(brand, title, source_url, image_url)
+    if has_brand:
+        score += 45
+    else:
+        score -= _image_conflicting_brand_penalty(brand, title, source_url)
 
-    token_hits = sum(1 for token in tokens if token in text)
-    score += token_hits * 8
+    product_tokens = [t for t in tokens if t not in _GENERIC_STOPWORDS]
+    token_hits = sum(1 for token in product_tokens if token in text)
+    if has_brand:
+        score += min(token_hits * 8, 40)
+    else:
+        score += min(token_hits * 2, 8)
 
     digits = re.sub(r"\D", "", barcode or "")
     if digits and digits in re.sub(r"\D", "", text):
@@ -892,18 +1058,21 @@ def _is_candidate_image_valid(
     positive = _image_positive_product_score(final_url, title, source_url, product_name, brand, barcode)
     penalty = _image_negative_asset_penalty(final_url, title, source_url)
 
-    # Prefer higher-ranked SerpAPI results. This makes the Google Images order
-    # useful instead of choosing a random CDN image with slightly more tokens.
+    # Google rank bonus only when the verified brand is present in metadata.
+    has_brand = _verified_brand_in_text(brand, title, source_url)
     try:
         position = int(candidate.get("position") or 0)
     except Exception:
         position = 0
-    if position == 1:
-        positive += 45
-    elif 2 <= position <= 3:
-        positive += 30
-    elif 4 <= position <= 5:
-        positive += 15
+    if has_brand:
+        if position == 1:
+            positive += 45
+        elif 2 <= position <= 3:
+            positive += 30
+        elif 4 <= position <= 5:
+            positive += 15
+    else:
+        positive -= _image_conflicting_brand_penalty(brand, title, source_url)
 
     # Prefer official/brand domains generically. This is not a hardcoded brand
     # whitelist; it derives tokens from the verified brand name.
@@ -1109,7 +1278,7 @@ def _serpapi_hk_product_page_candidates(
                 budget.record_hk()
             calls_made += 1
 
-            resp = http_requests.get(
+            resp = _timed_http_get(
                 "https://serpapi.com/search",
                 params={
                     "engine": "google",
@@ -1175,6 +1344,345 @@ def _serpapi_hk_product_page_candidates(
     return listings[:max_results], result_notes
 
 
+_AI_MODE_EMPTY_PHRASES = (
+    "no response available",
+    "try asking something else",
+    "couldn't generate",
+    "something went wrong",
+    "can't help with that",
+)
+
+
+def _is_usable_ai_mode_facts(facts: str, urls: list[str]) -> bool:
+    """Reject SerpAPI AI Mode placeholder/error text that contains no product evidence."""
+    norm = (facts or "").strip().lower()
+    if not norm and not urls:
+        return False
+    if any(phrase in norm for phrase in _AI_MODE_EMPTY_PHRASES):
+        return False
+    if len(norm) < 80 and not urls:
+        return False
+    return True
+
+
+def _build_ai_mode_simple_query(barcode: str) -> str:
+    """Short query that matches manual browser AI Mode searches."""
+    return f"find the product with barcode {barcode} and its guaranteed analysis"
+
+
+def _format_serpapi_organic_results_as_facts(data: dict, query: str) -> tuple[str, list[str]]:
+    """Turn regular Google Search JSON into research text for Gemini extraction."""
+    parts = [f"SerpAPI Google Search query: {query}"]
+    urls: list[str] = []
+
+    for item in data.get("organic_results") or []:
+        title = (item.get("title") or "").strip()
+        link = (item.get("link") or "").strip()
+        snippet = (item.get("snippet") or "").strip()
+        if link:
+            urls.append(link)
+        if title or snippet or link:
+            parts.append(f"{title}\n{snippet}\n{link}".strip())
+
+    for block_name in ["shopping_results", "inline_shopping_results", "product_results"]:
+        block = data.get(block_name) or []
+        if isinstance(block, dict):
+            block = [block]
+        for item in block:
+            title = (item.get("title") or item.get("name") or "").strip()
+            link = (
+                item.get("link")
+                or item.get("product_link")
+                or item.get("serpapi_product_api")
+                or ""
+            ).strip()
+            snippet = " ".join(
+                str(item.get(k) or "")
+                for k in ["snippet", "description", "price", "extracted_price", "source"]
+            ).strip()
+            if link:
+                urls.append(link)
+            if title or snippet or link:
+                parts.append(f"{title}\n{snippet}\n{link}".strip())
+
+    kg = data.get("knowledge_graph") or {}
+    if isinstance(kg, dict) and kg:
+        kg_title = (kg.get("title") or "").strip()
+        kg_desc = (kg.get("description") or "").strip()
+        kg_link = ""
+        for key in ("website", "source", "link"):
+            val = kg.get(key)
+            if isinstance(val, dict):
+                kg_link = (val.get("link") or val.get("url") or "").strip()
+            elif isinstance(val, str):
+                kg_link = val.strip()
+            if kg_link:
+                break
+        if kg_link:
+            urls.append(kg_link)
+        if kg_title or kg_desc:
+            parts.append(f"Knowledge graph: {kg_title}\n{kg_desc}\n{kg_link}".strip())
+
+    facts = "\n\n".join(p for p in parts if p)
+    return facts, list(dict.fromkeys(urls))
+
+
+def _parse_serpapi_ai_mode_response(data: dict) -> tuple[str, list[str], str]:
+    """Extract research text, source URLs, and SerpAPI search id from AI Mode JSON."""
+    parts: list[str] = []
+
+    markdown = (data.get("reconstructed_markdown") or "").strip()
+    if markdown:
+        parts.append(markdown)
+
+    for block in data.get("text_blocks") or []:
+        snippet = (block.get("snippet") or "").strip()
+        if snippet:
+            parts.append(snippet)
+        for item in block.get("list") or []:
+            item_snippet = (item.get("snippet") or "").strip()
+            if item_snippet:
+                parts.append(item_snippet)
+        for row in block.get("table") or []:
+            if isinstance(row, list):
+                parts.append(" | ".join(str(cell) for cell in row if cell))
+
+    for qr in data.get("quick_results") or []:
+        title = (qr.get("title") or "").strip()
+        snippet = (qr.get("snippet") or "").strip()
+        link = (qr.get("link") or "").strip()
+        if title or snippet:
+            parts.append(f"{title}: {snippet}".strip(": "))
+        if link:
+            parts.append(link)
+
+    facts = "\n\n".join(p for p in parts if p)
+
+    urls: list[str] = []
+    for ref in data.get("references") or []:
+        link = (ref.get("link") or "").strip()
+        if link:
+            urls.append(link)
+        title = (ref.get("title") or "").strip()
+        snippet = (ref.get("snippet") or "").strip()
+        if title or snippet:
+            facts += f"\n\nSource: {title}\n{snippet}\n{link}"
+
+    search_id = str((data.get("search_metadata") or {}).get("id") or "")
+    return facts, list(dict.fromkeys(urls)), search_id
+
+
+def _serpapi_google_ai_mode_identity(
+    barcode: str,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> tuple[str, list[str], str]:
+    """
+    SerpAPI Google AI Mode — identity rescue when Vertex AI grounding finds nothing.
+    Tries a short global query first, then Hong Kong. Returns (facts_text, source_urls, search_id).
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI Google AI Mode skipped.")
+        return "", [], ""
+
+    if budget and not budget.can_call_ai_mode():
+        log.info("SerpAPI AI Mode budget exhausted; skipping identity rescue.")
+        return "", [], ""
+
+    cache_ttl = _env_int("SERPAPI_AI_MODE_CACHE_TTL", 24 * 3600)
+    cache_label = f"identity_{barcode}"
+
+    if use_cache:
+        cached = _read_serpapi_cache("ai_mode", barcode, cache_label, cache_ttl)
+        if isinstance(cached, dict):
+            facts = cached.get("facts") or ""
+            urls = cached.get("urls") or []
+            if _is_usable_ai_mode_facts(facts, urls):
+                return facts, urls, cached.get("search_id") or ""
+            log.info("SerpAPI AI Mode cache hit rejected (empty/error response); retrying live.")
+
+    query = _build_ai_mode_simple_query(barcode)
+    hk_location = os.getenv("SERPAPI_AI_MODE_LOCATION", "Hong Kong")
+    attempts = [
+        ("global", "us", "google.com", "United States"),
+        ("hk", "hk", "google.com.hk", hk_location),
+    ]
+
+    for label, gl, google_domain, location in attempts:
+        if budget and not budget.can_call_ai_mode():
+            log.info("SerpAPI AI Mode budget exhausted after %s attempt.", label)
+            break
+
+        try:
+            log.info(
+                "SerpAPI Google AI Mode identity query for barcode=%s (%s, %s)",
+                barcode, label, google_domain,
+            )
+            if budget:
+                budget.record_ai_mode()
+
+            resp = _timed_http_get(
+                "https://serpapi.com/search",
+                params={
+                    "engine": "google_ai_mode",
+                    "q": query,
+                    "api_key": api_key,
+                    "hl": "en",
+                    "gl": gl,
+                    "google_domain": google_domain,
+                    "location": location,
+                    "device": "desktop",
+                },
+                timeout=90,
+            )
+            log.info("SerpAPI Google AI Mode HTTP %s (%s)", resp.status_code, label)
+            if resp.status_code >= 400:
+                log.warning("SerpAPI AI Mode error body (%s): %s", label, resp.text[:500])
+                continue
+
+            data = resp.json()
+            if data.get("error"):
+                log.warning("SerpAPI AI Mode API error (%s): %s", label, data.get("error"))
+                continue
+
+            facts, urls, search_id = _parse_serpapi_ai_mode_response(data)
+            log.info(
+                "SerpAPI Google AI Mode (%s): %d chars | %d URLs | search_id=%s",
+                label, len(facts), len(urls), search_id or "—",
+            )
+
+            if not _is_usable_ai_mode_facts(facts, urls):
+                log.warning(
+                    "SerpAPI AI Mode (%s) returned no usable product evidence for barcode=%s",
+                    label, barcode,
+                )
+                continue
+
+            _write_serpapi_cache("ai_mode", barcode, cache_label, {
+                "facts": facts,
+                "urls": urls,
+                "search_id": search_id,
+            })
+            return facts, urls, search_id
+
+        except Exception as exc:
+            log.warning("SerpAPI Google AI Mode identity search failed (%s): %s", label, exc)
+
+    return "", [], ""
+
+
+def _serpapi_google_barcode_search_identity(
+    barcode: str,
+    budget: SerpApiBudget | None = None,
+    use_cache: bool = True,
+) -> tuple[str, list[str], str]:
+    """
+    Regular SerpAPI Google Search fallback when AI Mode returns nothing.
+    Returns (facts_text, source_urls, comma-separated search_ids).
+    """
+    api_key = os.getenv("SERPAPI_API_KEY")
+    if not api_key:
+        log.warning("SERPAPI_API_KEY is missing. SerpAPI barcode search skipped.")
+        return "", [], ""
+
+    if budget and not budget.can_call_identity_search():
+        log.info("SerpAPI identity-search budget exhausted; skipping barcode fallback.")
+        return "", [], ""
+
+    cache_ttl = _env_int("SERPAPI_IDENTITY_SEARCH_CACHE_TTL", 24 * 3600)
+    cache_label = f"search_{barcode}"
+
+    if use_cache:
+        cached = _read_serpapi_cache("identity", barcode, cache_label, cache_ttl)
+        if isinstance(cached, dict):
+            facts = cached.get("facts") or ""
+            urls = cached.get("urls") or []
+            if facts or urls:
+                return facts, urls, cached.get("search_id") or ""
+
+    queries = [f'"{barcode}"', f'"{barcode}" pet food']
+    attempts = [
+        ("global", "us", "google.com", "United States"),
+        ("hk", "hk", "google.com.hk", os.getenv("SERPAPI_AI_MODE_LOCATION", "Hong Kong")),
+    ]
+
+    merged_facts: list[str] = []
+    merged_urls: list[str] = []
+    search_ids: list[str] = []
+
+    for label, gl, google_domain, location in attempts:
+        for query in queries:
+            if budget and not budget.can_call_identity_search():
+                log.info("SerpAPI identity-search budget exhausted.")
+                break
+
+            try:
+                log.info(
+                    "SerpAPI barcode search for barcode=%s (%s): %s",
+                    barcode, label, query,
+                )
+                if budget:
+                    budget.record_identity_search()
+
+                resp = _timed_http_get(
+                    "https://serpapi.com/search",
+                    params={
+                        "engine": "google",
+                        "q": query,
+                        "api_key": api_key,
+                        "hl": "en",
+                        "gl": gl,
+                        "google_domain": google_domain,
+                        "location": location,
+                        "num": 10,
+                    },
+                    timeout=45,
+                )
+                log.info("SerpAPI barcode search HTTP %s (%s)", resp.status_code, label)
+                if resp.status_code >= 400:
+                    log.warning("SerpAPI barcode search error body (%s): %s", label, resp.text[:500])
+                    continue
+
+                data = resp.json()
+                if data.get("error"):
+                    log.warning("SerpAPI barcode search API error (%s): %s", label, data.get("error"))
+                    continue
+
+                facts, urls = _format_serpapi_organic_results_as_facts(data, query)
+                search_id = str((data.get("search_metadata") or {}).get("id") or "")
+                if search_id:
+                    search_ids.append(search_id)
+                if facts:
+                    merged_facts.append(facts)
+                merged_urls.extend(urls)
+
+                if merged_urls:
+                    break
+            except Exception as exc:
+                log.warning("SerpAPI barcode search failed (%s, %s): %s", label, query, exc)
+
+        if merged_urls:
+            break
+
+    facts_text = "\n\n---\n\n".join(merged_facts)
+    unique_urls = list(dict.fromkeys(merged_urls))
+    search_id_text = ",".join(search_ids)
+
+    if facts_text or unique_urls:
+        _write_serpapi_cache("identity", barcode, cache_label, {
+            "facts": facts_text,
+            "urls": unique_urls,
+            "search_id": search_id_text,
+        })
+
+    log.info(
+        "SerpAPI barcode search: %d chars | %d URLs | search_ids=%s",
+        len(facts_text), len(unique_urls), search_id_text or "—",
+    )
+    return facts_text, unique_urls, search_id_text
+
+
 def _gemini_vision_verify_product_image(
     self,
     image_bytes: bytes,
@@ -1210,7 +1718,8 @@ Rules:
 - Return true only if the visible package/label appears to match the product name and brand.
 """
 
-        response = self._client.models.generate_content(
+        timer = get_lookup_timer()
+        gen_kwargs = dict(
             model=self._model_name,
             contents=[
                 prompt,
@@ -1218,6 +1727,11 @@ Rules:
             ],
             config=self._extract_config,
         )
+        if timer:
+            with timer.measure("gemini"):
+                response = self._gemini_generate(**gen_kwargs)
+        else:
+            response = self._gemini_generate(**gen_kwargs)
 
         raw = _collect_text(response)
         data = _extract_json(raw)
@@ -1241,7 +1755,7 @@ def _get_page_text(url: str) -> tuple[bool, str, str, int]:
     HTTP status is 200.
     """
     try:
-        resp = http_requests.get(
+        resp = _timed_url_validation_get(
             url,
             allow_redirects=True,
             timeout=_URL_TIMEOUT,
@@ -2323,9 +2837,18 @@ class ProductSearcher:
             "Vertex AI ready | project=%s location=%s model=%s search_grounding=ON",
             cfg.google_cloud_project, cfg.google_cloud_location, self._model_name,
         )
+        self.last_lookup_timings: dict = {}
+        self.last_catalog_stats: dict = {}
+
+    def _gemini_generate(self, **kwargs):
+        timer = get_lookup_timer()
+        if timer:
+            with timer.measure("gemini"):
+                return self._client.models.generate_content(**kwargs)
+        return self._client.models.generate_content(**kwargs)
 
     def _grounded_search(self, prompt: str) -> tuple[str, list[str], list[str]]:
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._search_config,
@@ -2354,7 +2877,7 @@ class ProductSearcher:
             facts=(facts or "")[:12000] + url_context,
         )
 
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._extract_config,
@@ -2430,7 +2953,11 @@ class ProductSearcher:
             and bool(data.get("product_name"))
         )
 
-    def _fetch_product_info(self, barcode: str) -> tuple[dict, str]:
+    def _fetch_product_info(
+        self,
+        barcode: str,
+        serpapi_budget: SerpApiBudget | None = None,
+    ) -> tuple[dict, str]:
         log.info("Phase 1 – exact product identity verification (barcode=%s) …", barcode)
 
         facts_1, urls_1, _ = self._grounded_search(
@@ -2479,6 +3006,85 @@ class ProductSearcher:
         merged_urls = list(dict.fromkeys(urls_1 + urls_2))
         data = self._extract_product_json(barcode, merged_facts, merged_urls)
 
+        if self._is_verified(data):
+            return data, merged_facts
+
+        # ── Local HK catalog barcode evidence (HKTVmall URL index) ───────────
+        catalog_store = get_catalog_store()
+        if catalog_store.is_available:
+            timer = get_lookup_timer()
+            if timer:
+                with timer.measure("catalog"):
+                    catalog_hits = catalog_store.find_by_barcode(barcode)
+            else:
+                catalog_hits = catalog_store.find_by_barcode(barcode)
+            self.last_catalog_stats["barcode_hits"] = len(catalog_hits)
+            if catalog_hits:
+                log.info(
+                    "Local HK catalog: %d barcode hit(s) for %s — trying identity extraction",
+                    len(catalog_hits),
+                    barcode,
+                )
+                catalog_facts, catalog_urls = catalog_store.format_identity_evidence(
+                    barcode, catalog_hits,
+                )
+                if catalog_facts or catalog_urls:
+                    merged_facts = (
+                        merged_facts
+                        + "\n\n--- LOCAL HK CATALOG (BARCODE) ---\n\n"
+                        + catalog_facts
+                    )
+                    merged_urls = list(dict.fromkeys(merged_urls + catalog_urls))
+                    data = self._extract_product_json(barcode, merged_facts, merged_urls)
+                    if self._is_verified(data):
+                        return data, merged_facts
+
+        # ── SerpAPI Google AI Mode identity rescue ────────────────────────────
+        log.warning(
+            "Vertex AI grounding could not verify barcode %s. "
+            "Trying SerpAPI Google AI Mode identity rescue …",
+            barcode,
+        )
+        ai_facts, ai_urls, search_id = _serpapi_google_ai_mode_identity(
+            barcode,
+            budget=serpapi_budget,
+        )
+        if ai_facts or ai_urls:
+            ai_section = ai_facts
+            if search_id:
+                ai_section = f"SerpAPI Google AI Mode search_id={search_id}\n\n{ai_facts}"
+            merged_facts = (
+                merged_facts
+                + "\n\n--- SERPAPI GOOGLE AI MODE ---\n\n"
+                + ai_section
+            )
+            merged_urls = list(dict.fromkeys(merged_urls + ai_urls))
+            data = self._extract_product_json(barcode, merged_facts, merged_urls)
+
+        if not self._is_verified(data):
+            log.warning(
+                "SerpAPI AI Mode could not verify barcode %s. "
+                "Trying SerpAPI Google Search barcode fallback …",
+                barcode,
+            )
+            search_facts, search_urls, search_ids = _serpapi_google_barcode_search_identity(
+                barcode,
+                budget=serpapi_budget,
+            )
+            if search_facts or search_urls:
+                search_section = search_facts
+                if search_ids:
+                    search_section = (
+                        f"SerpAPI Google Search search_ids={search_ids}\n\n{search_facts}"
+                    )
+                merged_facts = (
+                    merged_facts
+                    + "\n\n--- SERPAPI GOOGLE BARCODE SEARCH ---\n\n"
+                    + search_section
+                )
+                merged_urls = list(dict.fromkeys(merged_urls + search_urls))
+                data = self._extract_product_json(barcode, merged_facts, merged_urls)
+
         if not self._is_verified(data):
             warnings = data.get("warnings") or []
             warnings.append(
@@ -2502,7 +3108,7 @@ class ProductSearcher:
             facts=facts,
             url_list=url_list,
         )
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._extract_config,
@@ -2526,7 +3132,7 @@ class ProductSearcher:
             barcode_variants=_quoted_variants(barcode),
             facts=facts,
         )
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._extract_config,
@@ -2564,8 +3170,36 @@ class ProductSearcher:
                 log.info("  Dropping non-product URL: %s", url)
                 continue
 
+            if item.get("catalog_trusted"):
+                item["price_hkd"] = _format_hkd_price(item.get("price_hkd"))
+                if not item.get("price_hkd"):
+                    log.info("  Dropping trusted catalog URL without HKD price: %s", url)
+                    continue
+                listing_data = {
+                    k: v for k, v in item.items() if k not in _RETAILER_META_KEYS
+                }
+                try:
+                    listing = RetailerListing(**listing_data)
+                    validated.append(listing)
+                    seen_urls.add(url)
+                    self.last_catalog_stats["trusted_retailers"] = (
+                        self.last_catalog_stats.get("trusted_retailers", 0) + 1
+                    )
+                    log.info(
+                        "  ✔ [catalog trusted] %s  %s",
+                        item.get("retailer_name"),
+                        item.get("price_hkd"),
+                    )
+                except Exception as exc:
+                    log.warning("  Malformed trusted catalog entry: %s – %s", item, exc)
+                if len(validated) >= _MAX_RETAILERS:
+                    break
+                continue
+
             log.info("  Checking retailer URL: %s", url)
-            valid_page, final_url, page_price, page_stock = _validate_product_page(url, barcode, product_name, brand)
+            valid_page, final_url, page_price, page_stock = _validate_product_page(
+                url, barcode, product_name, brand,
+            )
 
             # Primary path: live page opened and matched.
             if valid_page:
@@ -2614,7 +3248,7 @@ class ProductSearcher:
             brand=brand or "",
             facts=(facts or "")[:12000],
         )
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._extract_config,
@@ -2675,7 +3309,7 @@ class ProductSearcher:
             brand=brand or "",
             facts=(facts or "")[:12000],
         )
-        response = self._client.models.generate_content(
+        response = self._gemini_generate(
             model=self._model_name,
             contents=prompt,
             config=self._extract_config,
@@ -2850,7 +3484,7 @@ Rules:
 - Return false for logos, certification seals, trust badges, payment icons, banners, placeholders, or unrelated products.
 - Return true only if the visible package/label appears to match the product name and brand.
 """
-            response = self._client.models.generate_content(
+            response = self._gemini_generate(
                 model=self._model_name,
                 contents=[
                     prompt,
@@ -2900,6 +3534,8 @@ Rules:
         if not candidates:
             log.info("No SerpAPI image candidates found; falling back to Gemini grounding image discovery.")
             return None
+
+        candidates = _rank_image_candidates(candidates, product_name, brand, barcode)
 
         official_ranked: list[tuple[int, str, bytes, str]] = []
         other_ranked: list[tuple[int, str, bytes, str]] = []
@@ -3126,6 +3762,46 @@ Rules:
         valid: list[RetailerListing] = []
         existing: set[str] = set()
 
+        # Local scraped HK catalog — fast path before paid SerpAPI discovery.
+        catalog_store = get_catalog_store()
+        if catalog_store.is_available and product_name:
+            timer = get_lookup_timer()
+            if timer:
+                with timer.measure("catalog"):
+                    catalog_listings = catalog_store.find_retailers_by_product(
+                        brand=brand or "",
+                        product_name=product_name,
+                        barcode=barcode,
+                    )
+            else:
+                catalog_listings = catalog_store.find_retailers_by_product(
+                    brand=brand or "",
+                    product_name=product_name,
+                    barcode=barcode,
+                )
+            self.last_catalog_stats["retailer_candidates"] = len(catalog_listings)
+            catalog_candidates = catalog_store.to_retailer_candidates(
+                catalog_listings, lookup_barcode=barcode,
+            )
+            if catalog_candidates:
+                log.info(
+                    "Local HK catalog: %d retailer candidate(s) for %s",
+                    len(catalog_candidates),
+                    product_name,
+                )
+                catalog_facts = "\n".join(
+                    f"{item.get('retailer_name')}: {item.get('url')}"
+                    for item in catalog_candidates
+                )
+                for listing in self._validate_retailers(
+                    catalog_candidates, barcode, product_name, brand, catalog_facts,
+                ):
+                    if listing.url not in existing:
+                        valid.append(listing)
+                        existing.add(listing.url)
+                if len(valid) >= _MIN_RETAILERS:
+                    return valid[:_MAX_RETAILERS]
+
         # SerpAPI normal Google Search is the primary URL discovery layer for
         # HK buy pages. Gemini can still reason/extract, but it is not reliable
         # enough as the only URL source.
@@ -3254,11 +3930,28 @@ Rules:
 
         Only verified product identities are returned as cacheable ProductInfo.
         """
+        timer = LookupTimer()
+        timer_token = activate_lookup_timer(timer)
+        wall_start = time.perf_counter()
+        self.last_catalog_stats = {
+            "barcode_hits": 0,
+            "retailer_candidates": 0,
+            "trusted_retailers": 0,
+        }
+
+        try:
+            return self._run_search(barcode, timer)
+        finally:
+            timer.finish(wall_start)
+            deactivate_lookup_timer(timer_token)
+            self.last_lookup_timings = timer.to_dict()
+
+    def _run_search(self, barcode: str, timer: LookupTimer) -> ProductInfo:
         # One per-lookup SerpAPI budget prevents a single barcode from burning many calls.
         serpapi_budget = SerpApiBudget()
 
         # ── Phase 1: GLOBAL product identity ──────────────────────
-        prod_data, raw_facts = self._fetch_product_info(barcode)
+        prod_data, raw_facts = self._fetch_product_info(barcode, serpapi_budget=serpapi_budget)
 
         if not self._is_verified(prod_data):
             return ProductInfo(

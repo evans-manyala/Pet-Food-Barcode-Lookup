@@ -146,6 +146,22 @@ body {
   color: var(--red);
 }
 
+.header__dash-link {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.header__dash-link:hover {
+  color: var(--primary-dark);
+  border-color: var(--primary);
+}
+
 .main {
   flex: 1;
   max-width: var(--max-w);
@@ -811,12 +827,6 @@ body {
 .retailer-table a {
   color: var(--primary-dark);
   word-break: break-all;
-}
-
-.retailer-table .notes {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  max-width: 220px;
 }
 
 .retailer-cards {
