@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # or override with absolute paths on a specific PC/VM.
     hk_catalog_import_hktvmall_dir: str = "data/imports/hktvmall"
     hk_catalog_import_shopify_dir: str = "data/imports/shopify"
+    hk_catalog_import_master_scrape_dir: str = "data/imports/master_scrape"
 
     # ── Dashboard metrics (persisted across API restarts) ───────────────────
     metrics_enabled: bool = True

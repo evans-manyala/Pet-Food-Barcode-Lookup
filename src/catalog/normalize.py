@@ -17,6 +17,12 @@ _RETAILER_DISPLAY = {
     "www.pettington.com": "Pettington",
     "q-pets.com": "QPets",
     "www.q-pets.com": "QPets",
+    "petsorder.com.hk": "PetsOrder",
+    "www.petsorder.com.hk": "PetsOrder",
+    "eshop.legopet.com.hk": "Lego Pet",
+    "legopet.com.hk": "Lego Pet",
+    "petmarket.com.hk": "PetMarket",
+    "www.petmarket.com.hk": "PetMarket",
 }
 
 

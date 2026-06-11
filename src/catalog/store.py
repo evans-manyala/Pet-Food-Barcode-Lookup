@@ -19,7 +19,7 @@ from .normalize import (
     normalize_match_text,
     retailer_display_name,
 )
-from .trust import catalog_price_freshness_note, is_trusted_hktv_barcode_listing
+from .trust import catalog_price_freshness_note, is_trusted_catalog_barcode_listing
 
 log = logging.getLogger(__name__)
 
@@ -306,12 +306,12 @@ class HKCatalogStore:
             if not listing.product_url:
                 continue
             price = listing.price_hkd or format_price_hkd(listing.price_value)
-            trusted = is_trusted_hktv_barcode_listing(listing, lookup_barcode)
+            trusted = is_trusted_catalog_barcode_listing(listing, lookup_barcode)
             freshness = catalog_price_freshness_note(listing)
             scraped = f", scraped {listing.scraped_at}" if listing.scraped_at else ""
             notes = f"Local HK catalog ({listing.source}{scraped}). {freshness}"
             if trusted:
-                notes += " Trusted catalog URL (barcode in HKTV product link)."
+                notes += " Trusted catalog listing (barcode + HK$ price from scrape)."
             candidates.append({
                 "retailer_name": retailer_display_name(
                     listing.product_url, listing.source, listing.seller_name,

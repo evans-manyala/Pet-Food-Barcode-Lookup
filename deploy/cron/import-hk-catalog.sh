@@ -4,6 +4,7 @@
 # Default CSV locations (no machine-specific paths required):
 #   data/imports/hktvmall/
 #   data/imports/shopify/
+#   data/imports/master_scrape/
 #
 # Example crontab (weekly Sunday 03:00 UTC):
 #   0 3 * * 0 /path/to/Pet-Food-Barcode-Lookup/deploy/cron/import-hk-catalog.sh >> /var/log/pet-food-catalog-import.log 2>&1

@@ -3,8 +3,9 @@
 Import scraped HK retailer CSV files into the local SQLite catalog.
 
 Default CSV locations (inside the repo, portable on any machine):
-  data/imports/hktvmall/   — HKTVmall worksheet CSV files
-  data/imports/shopify/    — Vetopia, WnP, Pettington, QPets CSV files
+  data/imports/hktvmall/       — HKTVmall worksheet CSV files
+  data/imports/shopify/        — Vetopia, WnP, Pettington, QPets CSV files
+  data/imports/master_scrape/  — Master barcode scrape (PetsOrder, Lego Pet, …)
 
 Example:
   # Uses paths from .env or the defaults above
@@ -27,9 +28,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.catalog.importers import import_hktvmall_dir, import_shopify_dir
+from src.catalog.importers import (
+    import_hktvmall_dir,
+    import_master_scrape_dir,
+    import_shopify_dir,
+    parse_master_scrape_csv,
+)
 from src.catalog.paths import (
     DEFAULT_HKTVMALL_IMPORT_DIR,
+    DEFAULT_MASTER_SCRAPE_IMPORT_DIR,
     DEFAULT_SHOPIFY_IMPORT_DIR,
     PROJECT_ROOT as CATALOG_ROOT,
     resolve_import_dir,
@@ -61,6 +68,18 @@ def main() -> int:
         help=f"Shopify retailer CSV folder (default: {DEFAULT_SHOPIFY_IMPORT_DIR} under project root)",
     )
     parser.add_argument(
+        "--master-scrape-dir",
+        type=Path,
+        default=None,
+        help=f"Master barcode scrape CSV folder (default: {DEFAULT_MASTER_SCRAPE_IMPORT_DIR})",
+    )
+    parser.add_argument(
+        "--master-scrape-file",
+        type=Path,
+        default=None,
+        help="Single master scrape CSV file (overrides --master-scrape-dir for one import)",
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
@@ -81,9 +100,15 @@ def main() -> int:
         cfg.hk_catalog_import_shopify_dir,
         DEFAULT_SHOPIFY_IMPORT_DIR,
     )
+    master_scrape_dir = _resolve_arg_or_config(
+        args.master_scrape_dir,
+        cfg.hk_catalog_import_master_scrape_dir,
+        DEFAULT_MASTER_SCRAPE_IMPORT_DIR,
+    )
 
-    log.info("HKTVmall import dir: %s", hktvmall_dir)
-    log.info("Shopify import dir:  %s", shopify_dir)
+    log.info("HKTVmall import dir:      %s", hktvmall_dir)
+    log.info("Shopify import dir:       %s", shopify_dir)
+    log.info("Master scrape import dir: %s", master_scrape_dir)
 
     listings = []
     hktv_csv_count = 0
@@ -111,14 +136,38 @@ def main() -> int:
     else:
         log.warning("Shopify directory not found (skipped): %s", shopify_dir)
 
+    if args.master_scrape_file:
+        master_file = Path(args.master_scrape_file).expanduser().resolve()
+        if master_file.is_file():
+            master = parse_master_scrape_csv(master_file)
+            log.info("Parsed %d master-scrape listing(s) from %s", len(master), master_file)
+            listings.extend(master)
+        else:
+            log.warning("Master scrape file not found (skipped): %s", master_file)
+    elif master_scrape_dir.is_dir():
+        master_csv_count = len(list(master_scrape_dir.glob("*.csv")))
+        if master_csv_count:
+            master = import_master_scrape_dir(master_scrape_dir)
+            log.info(
+                "Parsed %d master-scrape listing(s) from %s",
+                len(master),
+                master_scrape_dir,
+            )
+            listings.extend(master)
+        else:
+            log.warning("No *.csv files in master scrape dir: %s", master_scrape_dir)
+    else:
+        log.warning("Master scrape directory not found (skipped): %s", master_scrape_dir)
+
     if not listings:
         log.error(
             "No listings parsed. Copy CSV scrapes into:\n"
             "  %s\n"
             "  %s\n"
-            "Or set HK_CATALOG_IMPORT_HKTVMALL_DIR / HK_CATALOG_IMPORT_SHOPIFY_DIR in .env",
+            "Or set HK_CATALOG_IMPORT_*_DIR in .env",
             CATALOG_ROOT / DEFAULT_HKTVMALL_IMPORT_DIR,
             CATALOG_ROOT / DEFAULT_SHOPIFY_IMPORT_DIR,
+            CATALOG_ROOT / DEFAULT_MASTER_SCRAPE_IMPORT_DIR,
         )
         return 1
 

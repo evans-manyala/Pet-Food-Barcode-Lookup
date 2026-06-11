@@ -1851,6 +1851,45 @@ def _format_hkd_price(value) -> str | None:
     return text
 
 
+_ANIMAL_LABELS = {
+    "dog": "Dog",
+    "dogs": "Dog",
+    "puppy": "Dog",
+    "puppies": "Dog",
+    "cat": "Cat",
+    "cats": "Cat",
+    "kitten": "Cat",
+    "kittens": "Cat",
+}
+
+
+def _coerce_target_animal(value) -> str | None:
+    """Normalize LLM output (sometimes a list like ['dog']) to a display string."""
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        parts = [str(v).strip() for v in value if v is not None and str(v).strip()]
+        if not parts:
+            return None
+        labels: list[str] = []
+        for part in parts:
+            key = _normalise_match_text(part)
+            label = _ANIMAL_LABELS.get(key, part.strip().title())
+            if label not in labels:
+                labels.append(label)
+        if not labels:
+            return None
+        if set(labels) == {"Dog", "Cat"}:
+            return "Dog & Cat"
+        return labels[0] if len(labels) == 1 else " & ".join(labels)
+
+    text = str(value).strip()
+    if not text:
+        return None
+    return _ANIMAL_LABELS.get(_normalise_match_text(text), text.title())
+
+
 def _coerce_retailer_item(item: dict) -> dict:
     """Make Gemini's retailer JSON safe for the Pydantic RetailerListing model."""
     item = dict(item or {})
@@ -2943,6 +2982,8 @@ class ProductSearcher:
             warnings = [warnings]
         data["warnings"] = [str(w)[:300] for w in warnings[:5]]
 
+        data["target_animal"] = _coerce_target_animal(data.get("target_animal"))
+
         return data
 
     @staticmethod
@@ -3969,7 +4010,7 @@ Rules:
 
         product_name = prod_data.get("product_name") or "Unknown Product"
         brand = prod_data.get("brand") or ""
-        target_animal = prod_data.get("target_animal") or ""
+        target_animal = _coerce_target_animal(prod_data.get("target_animal"))
         mfr_url = prod_data.get("manufacturer_url")
 
         # ── Phase 2: GLOBAL nutrition ─────────────────────────────

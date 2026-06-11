@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Default layout inside the repo — copy scraped CSV folders here on any PC/VM.
 DEFAULT_HKTVMALL_IMPORT_DIR = "data/imports/hktvmall"
 DEFAULT_SHOPIFY_IMPORT_DIR = "data/imports/shopify"
+DEFAULT_MASTER_SCRAPE_IMPORT_DIR = "data/imports/master_scrape"
 
 
 def resolve_import_dir(raw: str | None, default_relative: str) -> Path:
@@ -32,3 +33,7 @@ def default_hktvmall_import_dir() -> Path:
 
 def default_shopify_import_dir() -> Path:
     return resolve_import_dir(None, DEFAULT_SHOPIFY_IMPORT_DIR)
+
+
+def default_master_scrape_import_dir() -> Path:
+    return resolve_import_dir(None, DEFAULT_MASTER_SCRAPE_IMPORT_DIR)
