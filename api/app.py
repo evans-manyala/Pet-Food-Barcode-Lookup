@@ -63,7 +63,11 @@ def _record_lookup(
     unverified: bool = False,
     warning_count: int = 0,
     identity_confidence: str = "",
+    timings: dict | None = None,
+    catalog_stats: dict | None = None,
 ) -> None:
+    timings = timings or {}
+    catalog_stats = catalog_stats or {}
     metrics.record(LookupEvent(
         ts=time.time(),
         barcode=barcode,
@@ -79,6 +83,13 @@ def _record_lookup(
         unverified=unverified,
         warning_count=warning_count,
         identity_confidence=identity_confidence,
+        gemini_ms=int(timings.get("gemini_ms") or 0),
+        serpapi_ms=int(timings.get("serpapi_ms") or 0),
+        catalog_ms=int(timings.get("catalog_ms") or 0),
+        url_validation_ms=int(timings.get("url_validation_ms") or 0),
+        catalog_barcode_hits=int(catalog_stats.get("barcode_hits") or 0),
+        catalog_retailer_candidates=int(catalog_stats.get("retailer_candidates") or 0),
+        catalog_trusted_retailers=int(catalog_stats.get("trusted_retailers") or 0),
     ))
 
 
@@ -126,8 +137,13 @@ def _do_lookup(raw_barcode: str, force_refresh: bool) -> dict:
 
     barcode_for_metrics = result.barcode
 
+    lookup_timings: dict | None = None
+    lookup_catalog: dict | None = None
+
     try:
         lookup = lookup_barcode(result.barcode, force_refresh=force_refresh)
+        lookup_timings = lookup.timings
+        lookup_catalog = lookup.catalog_stats
     except EnvironmentError as exc:
         _record_lookup(
             barcode=barcode_for_metrics,
@@ -179,6 +195,8 @@ def _do_lookup(raw_barcode: str, force_refresh: bool) -> dict:
             unverified=True,
             warning_count=len(product.warnings) if product else 0,
             identity_confidence=product.identity_confidence if product else "",
+            timings=lookup_timings,
+            catalog_stats=lookup_catalog,
         )
         if product:
             return {
@@ -200,6 +218,8 @@ def _do_lookup(raw_barcode: str, force_refresh: bool) -> dict:
         has_retailers=bool(product.hk_retailers),
         warning_count=len(product.warnings),
         identity_confidence=product.identity_confidence,
+        timings=lookup_timings,
+        catalog_stats=lookup_catalog,
     )
 
     return {

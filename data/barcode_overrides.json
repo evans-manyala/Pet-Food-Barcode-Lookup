@@ -1,0 +1,654 @@
+{
+  "version": 1,
+  "description": "Curated barcode corrections merged into the HK catalog on import and used for catalog-first identity at lookup time. Use warnings for shopper-facing UI copy; use notes for internal/ops guidance only.",
+  "overrides": [
+    {
+      "barcode": "4891989233529",
+      "product_name": "Duck Recipe Digestive Health Fresh Food Pack 100g",
+      "brand": "Kong Style",
+      "target_animal": "Dog",
+      "image_url": "https://shoplineimg.com/58071ed06170691716660900/660fd6a0211ea0000ed7f5ae/800x.webp?source_format=png",
+      "barcode_evidence": "Curated override: HKTVmall URL slug and PetsOrder SKU agree on Kong Style duck recipe 100g; Whiskas cat listings on this barcode are incorrect.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "14.0",
+        "crude_fat_min": "6.5",
+        "crude_fiber_max": "0.5",
+        "moisture_max": "60.0",
+        "ash_max": "2.0",
+        "calories": "125 kcal/100g"
+      },
+      "retailers": [
+        {
+          "source": "petsorder",
+          "seller_name": "PetsOrder",
+          "url": "https://www.petsorder.com.hk/products/kong-style-for-dog-complete--fresh-digestive-health-duck-recipe-100g",
+          "price_hkd": "HK$32.00",
+          "price_value": 32.0
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "LEGO PET",
+          "url": "https://www.hktvmall.com/hktv/en/main/LEGO-PET/s/H5065003/Pets/Pets/For-Dog/Dog-Food/Dog-Pouches/Duck-Recipe-Digestive-Health-For-Dog100g-EXP-20261231/p/H5065003_S_4891989233529",
+          "price_hkd": "HK$45.00",
+          "price_value": 45.0
+        }
+      ],
+      "warnings": [
+        "Some databases list a different product for this barcode.",
+        "We have confirmed this is the Kong Style duck recipe fresh food pack for dogs."
+      ],
+      "notes": "Known HK barcode collision: do not map to Whiskas cat pouch."
+    },
+    {
+      "barcode": "3182550737593",
+      "product_name": "Royal Canin Sterilised 37 Dry Cat Food 2kg",
+      "brand": "Royal Canin",
+      "target_animal": "Cat",
+      "image_url": "https://www.royalcanin.com.hk/cdn-cgi/image/width=800,height=800,fit=pad,format=auto,quality=90,dpr=auto,f=auto/globalassets/rc-anz/product-images/sterilised-37-dry-packshot.png",
+      "barcode_evidence": "Barcode 3182550737593 maps to Royal Canin FHN Sterilised 37 cat dry food 2kg (STL37).",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "37.0",
+        "crude_fat_min": "12.0",
+        "crude_fiber_max": "6.2",
+        "ash_max": "8.2"
+      },
+      "retailers": [
+        {
+          "source": "petsorder",
+          "seller_name": "PetsOrder",
+          "url": "https://www.petsorder.com.hk/products/royal-canin-sterilised-37-",
+          "price_hkd": "HK$220.00",
+          "price_value": 220.0,
+          "notes": "2kg variant sale price"
+        },
+        {
+          "source": "legopet",
+          "seller_name": "Lego Pet",
+          "url": "https://eshop.legopet.com.hk/en/products/royal-canin-sterilised-37",
+          "price_hkd": "HK$224.00",
+          "price_value": 224.0,
+          "notes": "2kg variant sale price"
+        }
+      ],
+      "warnings": [
+        "This product is sold in several pack sizes (2kg, 4kg, and 10kg). This barcode is for the 2kg bag only.",
+        "Please confirm the size on the retailer's website before buying — prices differ between sizes."
+      ],
+      "notes": "Multi-variant Shopline pages list 2kg/4kg/10kg; use 2kg prices only for this barcode."
+    },
+    {
+      "barcode": "4891989233550",
+      "product_name": "Kong Style Duck Recipe Digestive Health Fresh Meal for Cats 100g",
+      "brand": "喵風味",
+      "target_animal": "Cat",
+      "barcode_evidence": "PetsOrder catalog barcode 4891989233550 maps to duck recipe digestive health 100g cat pouch.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "14",
+        "crude_fat_min": "6.5",
+        "crude_fiber_max": "0.5",
+        "moisture_max": "70",
+        "ash_max": "2",
+        "calories": "145 kcal/100g"
+      },
+      "retailers": [
+        {
+          "source": "petsorder",
+          "seller_name": "PetsOrder",
+          "url": "https://www.petsorder.com.hk/products/kong-style-duck-recipe-digestive-health-fresh-meal-for-cats-100g-cat-pouches",
+          "price_hkd": "HK$32.00",
+          "price_value": 32.0,
+          "notes": "Duck recipe 100g"
+        }
+      ],
+      "warnings": [
+        "This brand sells duck, chicken, and salmon flavors as separate products.",
+        "This barcode is for the duck recipe only. Please check the flavor on the retailer's page before buying."
+      ],
+      "notes": "Do not merge chicken or salmon PetsOrder URLs into this duck barcode."
+    },
+    {
+      "barcode": "699184021644",
+      "product_name": "Almo Nature HQS Digestive Support Formula - Mackerel Recipe with Spinach in Gravy Wet Cat Food (50g x 6)",
+      "brand": "Almo Nature",
+      "target_animal": "Cat",
+      "barcode_evidence": "UPC 699184021644 maps to Almo Nature HQS Digestive Support mackerel with spinach in gravy wet cat food, 50g x 6 pack.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "8.5",
+        "crude_fat_min": "4.0",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "83.5",
+        "ash_max": "3.0"
+      },
+      "retailers": [
+        {
+          "source": "wnp",
+          "seller_name": "Whiskers N Paws",
+          "url": "https://www.wnp.com.hk/products/almo-nature-hqs-digestive-support-formula-spinach-in-gravy-cat-can",
+          "price_hkd": "HK$63.00",
+          "price_value": 63.0,
+          "notes": "HQS Digestive Support mackerel & spinach, 50g x 6 cans"
+        },
+        {
+          "source": "meow9",
+          "seller_name": "meow9.com",
+          "url": "https://www.meow9.com/products/hqs-supportive-formula-digestive-formula-mackerel-recipe-with-spinach-in-gravy-50g-x-6-1253",
+          "price_hkd": "HK$69.00",
+          "price_value": 69.0,
+          "notes": "Mackerel digestive formula 50g x 6"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "HKTVmall",
+          "url": "https://www.hktvmall.com/hktv/en/main/Health-Pets/s/H5096003/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/Adult-Cat-Food/HQS-Digestive-Supportive-Formula-Flaked-Mackerel-Spinach-in-Gravy-Cat-Canned-Box-Set-50g-x6/p/H5096003_S_almonature21644",
+          "price_hkd": "HK$69.00",
+          "price_value": 69.0,
+          "notes": "Health Pets — 50g x 6 box set"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pet Club",
+          "url": "https://www.hktvmall.com/hktv/en/main/Pet-Pet-Club/s/B0184001/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/Complementary-Cat-Food/Cat-food-kit-Gastrointestinal-care-formula-Mackerel-Spinach-gravy-50g-x-6-cans/p/B0184001_S_699184021644",
+          "price_hkd": "HK$69.00",
+          "price_value": 69.0,
+          "notes": "Pet Pet Club — 50g x 6 cans"
+        }
+      ],
+      "warnings": [
+        "This product line includes several HQS Supportive Formula recipes (mackerel, chicken, tuna, and more).",
+        "This barcode is for the mackerel with spinach in gravy 50g x 6 pack — please confirm the recipe on the retailer's page."
+      ],
+      "notes": "Reject meow9 /categories/cat-cans browse URL. WNP Shopify row lacked barcode until catalog patch; HKTV Pet Pet Club URL embeds barcode 699184021644."
+    },
+    {
+      "barcode": "8852084173321",
+      "product_name": "Cindy's Recipe Original - Tender Chicken With Goat Milk for Kitten 70g #CR-062",
+      "brand": "Cindy's Recipe",
+      "target_animal": "Cat",
+      "image_url": "https://cdn-mms.hktvmall.com/hktv/mms/uploadProductImage/20ca/a511/ff2e/kmwyoCRKjY20221017111613_1200.png",
+      "barcode_evidence": "Barcode 8852084173321 maps to Cindy's Recipe CR-062 tender chicken with goat milk kitten wet cat food, 70g single can.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "7.0",
+        "crude_fat_min": "0.1",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "90.0",
+        "ash_max": "3.0",
+        "calories": "43.97 kcal/100g"
+      },
+      "retailers": [
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pet Fun",
+          "url": "https://www.hktvmall.com/hktv/en/main/Pet-Pet-Fun/s/H9499001/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/All-Ages-Cat-Food/20-Tender-Chicken-With-Goat-Milk-For-Kitten-70g-CR062/p/H9499001_S_PPT_Cindy_Can_CR062",
+          "price_hkd": "HK$11.00",
+          "price_value": 11.0,
+          "notes": "Single can 70g"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Islov Pets",
+          "url": "https://www.hktvmall.com/hktv/en/main/Islov-Pets/s/H7129002/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/All-Ages-Cat-Food/%E5%AB%A9%E9%AE%AE%E5%AB%A9%E9%9B%9E%E8%82%89%E5%B1%B1%E7%BE%8A%E5%A5%B6%E8%82%89%E6%B9%AF-%E8%B2%93%E7%BD%90%E9%A0%AD-%E5%B9%BC%E8%B2%93%E7%BD%90-70g-CR062/p/H7129002_S_PET-CR-062",
+          "price_hkd": "HK$11.00",
+          "price_value": 11.0,
+          "notes": "Single can 70g"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pet Fun",
+          "url": "https://www.hktvmall.com/hktv/en/main/Pet-Pet-Fun/s/H9499001/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/All-Ages-Cat-Food/20-Tender-Chicken-With-Goat-Milk-For-Kitten-70gx6-CR062/p/H9499001_S_PPT_Cindy_Can_CR062_X6",
+          "price_hkd": "HK$66.00",
+          "price_value": 66.0,
+          "notes": "6-pack 70g x 6"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 70g can and as a 6-can multipack — prices differ.",
+        "This barcode is for the single 70g can. Please check the pack size on the retailer's page before buying."
+      ],
+      "notes": "Replaced stale All About Pets / Pet Pet Club / Pet Pat HKTV URLs (Jun 2026). Pet Pet Fun + Islov Pets verified live."
+    },
+    {
+      "barcode": "4580865350053",
+      "product_name": "長生の秘訣 Mousse Cat Can - Chicken Immunity Formula 80g",
+      "brand": "長生の秘訣",
+      "target_animal": "Cat",
+      "image_url": "https://static.wixstatic.com/media/47e7d5_a998de3b3f204ed2acede891344b557e~mv2.jpg/v1/fill/w_588,h_588,al_c,lg_1,q_80,enc_avif,quality_auto/47e7d5_a998de3b3f204ed2acede891344b557e~mv2.jpg",
+      "barcode_evidence": "Barcode 4580865350053 maps to 長生の秘訣 (Chōsei no Hiketsu) chicken mousse immunity formula cat staple food can 80g.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "13.0",
+        "crude_fat_min": "7.0",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "85.0",
+        "calories": "106 kcal/can"
+      },
+      "retailers": [
+        {
+          "source": "hktvmall",
+          "seller_name": "LEGO PET",
+          "url": "https://www.hktvmall.com/hktv/zh/main/LEGO-PET-%E6%A8%82%E9%AB%98%E5%AF%B5%E7%89%A9/s/H5065003/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E6%85%95%E7%B5%B2%E8%B2%93%E7%BD%90-%E9%9B%9E%E8%82%89-%E5%85%8D%E7%96%AB%E9%85%8D%E6%96%B9-80g/p/H5065003_S_4580865350053",
+          "price_hkd": "HK$18.00",
+          "price_value": 18.0
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "PetsOrder",
+          "url": "https://www.hktvmall.com/hktv/zh/main/PetsOrder-%E5%AF%B5%E7%89%A9%E7%B6%B2/s/H5065004/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E9%9B%9E%E8%82%89-%E5%85%8D%E7%96%AB%E9%85%8D%E6%96%B9-%E6%85%95%E7%B5%B2%E7%BD%90-80g-%E8%B2%93%E7%BD%90%E9%A0%AD/p/H5065004_S_4580865350053",
+          "price_hkd": "HK$18.00",
+          "price_value": 18.0
+        }
+      ],
+      "notes": "Catalog had legopet eshop only at HK$9; HKTVmall LEGO PET + PetsOrder verified at HK$18 (Jun 2026)."
+    },
+    {
+      "barcode": "4580865350060",
+      "product_name": "長生きの秘訣 Cat Mousse - Tuna 80g (72-can case)",
+      "brand": "長生きの秘訣",
+      "target_animal": "Cat",
+      "image_url": "https://shoplineimg.com/59db5ac6d4e395b7920003c0/69a2b45ebe6e895d85915712/800x.jpg",
+      "barcode_evidence": "Barcode 4580865350060 maps to 長生きの秘訣 tuna mousse staple cat food 80g, 72-can original case.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "13.0",
+        "crude_fat_min": "7.0",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "85.0",
+        "calories": "109 kcal/80g"
+      },
+      "retailers": [
+        {
+          "source": "legopet",
+          "seller_name": "Lego Pet",
+          "url": "https://eshop.legopet.com.hk/products/長生の秘訣-貓系列罐頭-吞拿魚慕絲-80g",
+          "price_hkd": "HK$648.00",
+          "price_value": 648.0,
+          "notes": "72-can case (原箱72罐); single cans HK$9 on same page"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 80g can and as a 72-can case — prices differ.",
+        "This barcode is for the 72-can case. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "Fuzzy legopet catalog match was attaching unrelated CIAO HK$14 listings; pin 72-can case price only."
+    },
+    {
+      "barcode": "052742068435",
+      "product_name": "Hill's Science Diet Adult Perfect Weight Vegetable & Salmon Medley Cat Food 2.9oz (82g)",
+      "brand": "Hill's",
+      "target_animal": "Cat",
+      "image_url": "https://cdn.shopify.com/s/files/1/0201/6988/3748/files/ScienceDietAdultPerfectWeightVegetable_SalmonMedleyCatFood1.jpg?v=1747793330",
+      "barcode_evidence": "Barcode 052742068435 (UPC 52742068435) maps to Hill's Science Diet Specialty Perfect Weight vegetable & salmon medley cat canned food 2.9oz / 82g, SKU 608491.",
+      "identity_confidence": "high",
+      "retailers": [
+        {
+          "source": "hktvmall",
+          "seller_name": "ROU PET",
+          "url": "https://www.hktvmall.com/hktv/zh/main/ROU-PET/s/B0892001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E6%88%90%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E7%89%B9%E6%AE%8A%E9%85%8D%E6%96%B9%E6%88%90%E8%B2%93%E5%AE%8C%E7%BE%8E%E9%AB%94%E9%87%8D%E8%94%AC%E8%8F%9C%E4%B8%89%E6%96%87%E9%AD%9A%E4%B8%BB%E9%A3%9F%E8%B2%93%E7%BD%90%E9%A0%AD29%E5%AE%89%E5%A3%AB82%E5%85%8B/p/B0892001_S_052742068435",
+          "price_hkd": "HK$17.98",
+          "price_value": 17.98,
+          "notes": "Single 2.9oz can"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "All About Pets",
+          "url": "https://www.hktvmall.com/hktv/zh/main/All-About-Pets/s/H6527001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E6%88%90%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E7%89%B9%E6%AE%8A%E9%85%8D%E6%96%B9%E6%88%90%E8%B2%93%E5%AE%8C%E7%BE%8E%E9%AB%94%E9%87%8D%E8%94%AC%E8%8F%9C%E4%B8%89%E6%96%87%E9%AD%9A%E4%B8%BB%E9%A3%9F%E8%B2%93%E7%BD%90%E9%A0%AD29%E5%AE%89%E5%A3%AB82%E5%85%8B/p/H6527001_S_052742068435",
+          "price_hkd": "HK$18.00",
+          "price_value": 18.0,
+          "notes": "Single 2.9oz can"
+        },
+        {
+          "source": "wnp",
+          "seller_name": "Whiskers N Paws",
+          "url": "https://www.wnp.com.hk/products/hills-science-diet-adult-perfect-weight-vegetable-salmon-medley-cat-wet-food?variant=45077925757117",
+          "price_hkd": "HK$19.00",
+          "price_value": 19.0,
+          "notes": "Single 2.9oz can — verified live Jun 2026"
+        },
+        {
+          "source": "pettington",
+          "seller_name": "Pettington",
+          "url": "https://pettington.com/products/hills-science-diet-adult-%E6%88%90%E8%B2%93-%E5%AE%8C%E7%BE%8E%E9%AB%94%E9%87%8D-%E8%94%AC%E8%8F%9C%E4%B8%89%E6%96%87%E9%AD%9A%E4%B8%BB%E9%A3%9F%E7%BD%90-perfect-weight-vegetable-salmon-medley-cat-food-2-9oz",
+          "price_hkd": "HK$21.00",
+          "price_value": 21.0,
+          "notes": "Single 2.9oz can — Shopify barcode 52742068435 verified live Jun 2026"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 2.9oz can and in 6-, 12-, and 24-can multipacks — prices differ.",
+        "This barcode is for the single 2.9oz (82g) can. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "Catalog brand split HILLS vs Hill's caused false identity conflict; normalize to Hill's. WNP + Pettington URLs verified HTTP 200."
+    },
+    {
+      "barcode": "8001154001013",
+      "product_name": "Almo Nature HFC Jelly Salmon and Chicken Cat Food 70g",
+      "brand": "Almo Nature",
+      "target_animal": "Cat",
+      "image_url": "https://img.shoplineapp.com/media/image_clips/662c9ac534fdeb0020ac1573/original.jpeg?1714199237",
+      "barcode_evidence": "Barcode 8001154001013 maps to Almo Nature HFC Jelly salmon and chicken in jelly 70g (code 9030).",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "11.4",
+        "crude_fat_min": "3.2",
+        "crude_fiber_max": "0.1",
+        "moisture_max": "82.9",
+        "ash_max": "0.7",
+        "calories": "792 kcal/kg"
+      },
+      "retailers": [
+        {
+          "source": "hktvmall",
+          "seller_name": "寵物超市",
+          "url": "https://www.hktvmall.com/hktv/zh/main/%E5%AF%B5%E7%89%A9%E8%B6%85%E5%B8%82/s/B1154001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/HFC-Natural%E5%A4%A9%E7%84%B6%E9%9B%9E%E8%82%89%E4%B8%89%E6%96%87%E9%AD%9A%E5%95%AB%E5%96%B1%E8%B2%93%E7%BD%90%E9%A0%AD-70g-9030/p/B1154001_S_8001154001013",
+          "price_hkd": "HK$12.30",
+          "price_value": 12.3,
+          "notes": "Single 70g can"
+        },
+        {
+          "source": "meow9",
+          "seller_name": "meow9.com",
+          "url": "https://www.meow9.com/en/products/hfc-jelly-salmon-chicken-70g-cat-can-9030001013",
+          "price_hkd": "HK$14.00",
+          "price_value": 14.0,
+          "notes": "9030/001013 — verified live PDP Jun 2026"
+        },
+        {
+          "source": "petpethome",
+          "seller_name": "Pet Pet Home",
+          "url": "https://www.petpethome.com/almo-nature-hfc-cat-wet-food",
+          "price_hkd": "HK$14.00",
+          "price_value": 14.0,
+          "notes": "Multi-flavor PDP — select 9030 雞肉鮭魚(三文魚) 70g"
+        },
+        {
+          "source": "streetcatshostel",
+          "seller_name": "Street Cats Hostel",
+          "url": "https://www.streetcatshostel.com.hk/products/almo-nature-%E2%80%93-hfc-jelly-%E4%B8%89%E6%96%87%E9%AD%9A-salmon-70g",
+          "price_hkd": "HK$13.00",
+          "price_value": 13.0,
+          "notes": "Single 70g can"
+        }
+      ],
+      "warnings": [
+        "This product line includes many HFC Jelly flavors (tuna, chicken, salmon, and more).",
+        "This barcode is for the salmon and chicken in jelly 70g can (code 9030) — please confirm the flavor on the retailer's page."
+      ],
+      "notes": "Reject meow9 /categories/cat-food browse URL and petpethome manufacturer listing; SerpAPI had mis-linked HK$4.40 mini-food trial SKUs."
+    },
+    {
+      "barcode": "8001154125320",
+      "product_name": "Almo Nature Daily Grain Free Mousse Cat Canned - Salmon 85g (Code 158)",
+      "brand": "Almo Nature",
+      "target_animal": "Cat",
+      "image_url": "https://s3.eu-central-1.amazonaws.com/pimaws.almonature.com/thumbnails/Product%20Images/EU/15520/image-thumb__15520__productImageWeb/158_6.png",
+      "barcode_evidence": "Barcode 8001154125320 maps to Almo Nature Daily grain-free mousse salmon cat canned food 85g, code 158.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "9.5",
+        "crude_fat_min": "6.0",
+        "crude_fiber_max": "0.4",
+        "moisture_max": "81.0",
+        "ash_max": "2.0",
+        "calories": "904 kcal/kg"
+      },
+      "retailers": [
+        {
+          "source": "hktvmall",
+          "seller_name": "All About Pets",
+          "url": "https://www.hktvmall.com/hktv/zh/main/All-About-Pets/s/H6527001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E7%84%A1%E7%A9%80%E4%B8%BB%E9%A3%9F%E6%85%95%E7%B5%B2%E8%B2%93%E7%BD%90%E4%B8%89%E6%96%87%E9%AD%9A-85g-Code-158%E6%96%B0%E8%88%8A%E5%8C%85%E8%A3%9D%E9%9A%A8%E6%A9%9F%E7%99%BC%E8%B2%A8/p/H6527001_S_8001154125320",
+          "price_hkd": "HK$12.00",
+          "price_value": 12.0,
+          "notes": "Single 85g can"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pat",
+          "url": "https://www.hktvmall.com/hktv/zh/main/Pet-Pat/s/H9267001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/Daily-%E4%B8%89%E6%96%87%E9%AD%9A-%E6%88%90%E8%B2%93%E4%B8%BB%E9%A3%9F%E6%85%95%E7%B5%B2%E7%BD%90%E9%A0%AD85g-158-%E6%96%B0%E8%88%8A%E5%8C%85%E8%A3%9D%E9%9A%A8%E6%A9%9F%E7%99%BC%E8%B2%A8/p/H9267001_S_8001154125320",
+          "price_hkd": "HK$12.00",
+          "price_value": 12.0,
+          "notes": "Single 85g can"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pet Club",
+          "url": "https://www.hktvmall.com/hktv/zh/main/Pet-Pet-Club/s/B0184001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/%E7%84%A1%E7%A9%80%E4%B8%BB%E9%A3%9F%E6%85%95%E7%B5%B2%E8%B2%93%E7%BD%90%E4%B8%89%E6%96%87%E9%AD%9A-85g-%E6%96%B0%E8%88%8A%E5%8C%85%E8%A3%9D%E9%9A%A8%E6%A9%9F%E7%99%BC%E8%B2%A8/p/B0184001_S_8001154125320",
+          "price_hkd": "HK$12.00",
+          "price_value": 12.0,
+          "notes": "Single 85g can"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "All About Pets",
+          "url": "https://www.hktvmall.com/hktv/zh/main/All-About-Pets/s/H6527001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/6%E7%BD%90%E5%84%AA%E6%83%A0-%E7%84%A1%E7%A9%80%E4%B8%BB%E9%A3%9F%E6%85%95%E7%B5%B2%E8%B2%93%E7%BD%90%E9%A0%AD%E4%B8%89%E6%96%87%E9%AD%9A-85g-Code-158%E6%96%B0%E8%88%8A%E5%8C%85%E8%A3%9D%E9%9A%A8%E6%A9%9F%E7%99%BC%E8%B2%A8/p/H6527001_S_8001154125320-6",
+          "price_hkd": "HK$72.00",
+          "price_value": 72.0,
+          "notes": "6-pack 85g x 6"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Pat",
+          "url": "https://www.hktvmall.com/hktv/zh/main/Pet-Pat/s/H9267001/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E5%AF%B5%E7%89%A9%E7%94%A8%E5%93%81/%E8%B2%93%E8%B2%93%E5%B0%88%E5%8D%80/%E8%B2%93%E9%A3%9F%E5%93%81/%E8%B2%93%E7%BD%90%E9%A0%AD/%E5%85%A8%E8%B2%93%E4%B8%BB%E9%A3%9F%E7%BD%90/6%E7%BD%90%E5%84%AA%E6%83%A0-%E7%84%A1%E7%A9%80%E4%B8%BB%E9%A3%9F%E6%85%95%E7%B5%B2%E8%B2%93%E7%BD%90%E4%B8%89%E6%96%87%E9%AD%9A-85g-158%E6%96%B0%E8%88%8A%E5%8C%85%E8%A3%9D%E9%9A%A8%E6%A9%9F%E7%99%BC%E8%B2%A8/p/H9267001_S_8001154125320-6",
+          "price_hkd": "HK$72.00",
+          "price_value": 72.0,
+          "notes": "6-pack 85g x 6"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 85g can and as a 6-can multipack — prices differ.",
+        "This barcode is for the single 85g can. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "HKTVmall reuses EAN on single and 6-pack URLs; stale scrape had HK$10.80/HK$64.80. Multipack catalog rows detached from barcode on import patch."
+    },
+    {
+      "barcode": "45070778",
+      "product_name": "Purina Mon Petit Gold - Tuna with Whitebait Cat Canned Food 85g",
+      "brand": "Purina Mon Petit",
+      "target_animal": "Cat",
+      "image_url": "https://shop.nestle.com.hk/cdn/shop/products/TunaWhitebait_1000x.jpg?v=1759459254",
+      "barcode_evidence": "EAN-8 barcode 45070778 maps to Purina Mon Petit Gold tuna with whitebait cat canned food 85g (code 0778).",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "12.0",
+        "crude_fat_min": "0.3",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "85.0",
+        "ash_max": "3.0"
+      },
+      "retailers": [
+        {
+          "source": "qpets",
+          "seller_name": "Q-Pets",
+          "url": "https://www.q-pets.com/products/mon-petit-gold-tuna-and-rice-fish-canned-cat-food",
+          "price_hkd": "HK$10.60",
+          "price_value": 10.6,
+          "notes": "Single 85g can"
+        },
+        {
+          "source": "pns",
+          "seller_name": "PARKnSHOP",
+          "url": "https://www.pns.hk/en/cat-gold-tuna-whitebait/p/BP_112235",
+          "price_hkd": "HK$12.00",
+          "price_value": 12.0,
+          "notes": "Single 85g can"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "PAWS Outlet",
+          "url": "https://www.hktvmall.com/hktv/en/main/PAWS-Outlet/s/H5525002/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/All-Ages-Cat-Food/GOLD-Tuna-with-Whitebait-85g-x-6-Cat-Can-07786-MonPetit/p/H5525002_S_P2_MON_PETIT_11638010_6",
+          "price_hkd": "HK$67.20",
+          "price_value": 67.2,
+          "notes": "6-pack 85g x 6"
+        },
+        {
+          "source": "hktvmall",
+          "seller_name": "Pet Shop Guys",
+          "url": "https://www.hktvmall.com/hktv/en/main/Pet-Shop-Guys/s/H9760001/Pets/Pets/For-Cat/Cat-Food/Canned-Cat-Food/All-Ages-Cat-Food/GOLD-Tuna-with-Whitebait-85g-x-12-Cat-Can-077812-MonPetit/p/H9760001_S_MON_PETIT_11638010_12",
+          "price_hkd": "HK$134.40",
+          "price_value": 134.4,
+          "notes": "12-pack 85g x 12"
+        },
+        {
+          "source": "nestle",
+          "seller_name": "Nestlé HK eShop",
+          "url": "https://shop.nestle.com.hk/en/collections/purina%C2%AE%EF%B8%8F-mon-petit%C2%AE%EF%B8%8F/products/purina-mon-petit-gold-tuna-whitbait24x85g",
+          "price_hkd": "HK$215.00",
+          "price_value": 215.0,
+          "notes": "24-pack 85g x 24"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 85g can and in 6-, 12-, and 24-can multipacks — prices differ.",
+        "This barcode is for the single 85g can. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "Replaces live-search Yoho HK$14 listing; catalog had HKTV rows without indexed barcode. Verified retailers Jun 2026."
+    },
+    {
+      "barcode": "4894514083033",
+      "product_name": "VitaPet Supreme Adult Cat - Tuna & Whitebait 85g",
+      "brand": "VitaPet",
+      "target_animal": "Cat",
+      "image_url": "https://img.rtacdn-os.com/20230718/4417a853-4f63-495f-9be9-92db3c083ff3",
+      "barcode_evidence": "EAN-13 barcode 4894514083033 on the can label matches VitaPet Supreme Adult Cat Tuna & Whitebait 85g (item 736306). Replaces incorrect Fussie Cat mapping from dead Petss.com / blocked ePet.hk links.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "12.0",
+        "crude_fat_min": "0.5",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "85.0"
+      },
+      "retailers": [
+        {
+          "source": "wellcome",
+          "seller_name": "Wellcome",
+          "url": "https://www.wellcome.com.hk/zh-hant/p/%E7%B6%AD%E5%A4%9A%E5%AF%B6%E5%90%9E%E6%8B%BF%E9%AD%9A%E7%99%BD%E9%A3%AF%E9%AD%9A%E8%B2%93%E7%B3%A7%2085GM/i/113311294.html",
+          "price_hkd": "HK$7.00",
+          "price_value": 7.0,
+          "notes": "Single 85g can (12-for-$65 promo on same page)"
+        },
+        {
+          "source": "wellcome",
+          "seller_name": "Wellcome",
+          "url": "https://www.wellcome.com.hk/zh-hant/p/%E5%8E%9F%E7%AE%B1%E7%B6%AD%E5%A4%9A%E5%AF%B6%E5%90%9E%E6%8B%BF%E9%AD%9A%E7%99%BD%E9%A3%AF%E9%AD%9A%E8%B2%93%E7%B3%A7%2024%20X%2085GM/i/113353588.html",
+          "price_hkd": "HK$119.00",
+          "price_value": 119.0,
+          "notes": "24-pack 85g x 24"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 85g can and as a 24-can case — prices differ.",
+        "This barcode is for the single 85g can. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "Replaces live-search Fussie Cat Gold Label listing; Petss.com domain for sale and ePet.hk blocked. Verified Wellcome Jun 2026."
+    },
+    {
+      "barcode": "4894514083149",
+      "product_name": "VitaPet Supreme Adult Dog - Chicken & Cheese 100g",
+      "brand": "VitaPet Supreme",
+      "target_animal": "Dog",
+      "image_url": "https://img.rtacdn-os.com/20230718/f7cf325b-2c44-41d6-8387-98a5837df90e",
+      "barcode_evidence": "EAN-13 barcode 4894514083149 on the tray label matches VitaPet Supreme Adult Dog Chicken & Cheese 100g (item 735761). Replaces incorrect GimCat Multi-Vitamin Paste mapping from dead category-page links.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "7.0",
+        "crude_fat_min": "5.0",
+        "crude_fiber_max": "1.0",
+        "moisture_max": "77.0",
+        "ash_max": "3.0",
+        "other": {
+          "calcium_min": "0.2%",
+          "phosphorus_min": "0.2%"
+        }
+      },
+      "retailers": [
+        {
+          "source": "wellcome",
+          "seller_name": "Wellcome",
+          "url": "https://www.wellcome.com.hk/zh-hant/p/%E7%B6%AD%E5%A4%9A%E5%AF%B6%E9%9B%9E%E8%82%89%E5%8F%8A%E8%8A%9D%E5%A3%AB%E7%8B%97%E7%B3%A7%20100GM/i/113314989.html",
+          "price_hkd": "HK$11.00",
+          "price_value": 11.0,
+          "notes": "Single 100g tray (8-for-$58 promo on same page)"
+        },
+        {
+          "source": "wellcome",
+          "seller_name": "Wellcome",
+          "url": "https://www.wellcome.com.hk/zh-hant/p/%E5%8E%9F%E7%AE%B1%E7%B6%AD%E5%A4%9A%E5%AF%B6%20%E9%9B%9E%E8%82%89%E5%8F%8A%E8%8A%9D%E5%A3%AB%E7%8B%97%E7%B3%A7%2024%20X%20100GM/i/113354688.html",
+          "price_hkd": "HK$168.00",
+          "price_value": 168.0,
+          "notes": "24-pack 100g x 24"
+        }
+      ],
+      "warnings": [
+        "This product is sold as a single 100g tray and as a 24-tray case — prices differ.",
+        "This barcode is for the single 100g tray. Please confirm the pack size on the retailer's page before buying."
+      ],
+      "notes": "Replaces live-search GimCat paste listing; meow9/tbapet URLs were category browse pages. Verified Wellcome Jun 2026."
+    },
+    {
+      "barcode": "9003579008331",
+      "product_name": "Royal Canin Medium Puppy Dry Dog Food (Medium Junior)",
+      "brand": "Royal Canin",
+      "target_animal": "Dog",
+      "image_url": "https://www.petshack.hk/cdn/shop/files/RoyalCanin-DogFood-MediumPuppy_fc1b0669-ab38-4a3d-8d78-1dd7f14d039a_1200x1200.png?v=1702608904",
+      "barcode_evidence": "EAN 9003579008331 maps to Royal Canin Medium Puppy dry food for medium breed puppies (adult weight 11–25 kg, up to 12 months). Replaces incorrect wet-food identity and category-page retailer links from live search.",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "32.0",
+        "crude_fat_min": "20.0",
+        "crude_fiber_max": "1.7",
+        "moisture_max": "8.0",
+        "ash_max": "6.4"
+      },
+      "retailers": [
+        {
+          "source": "petshack",
+          "seller_name": "PetShack",
+          "url": "https://www.petshack.hk/zh/products/royal-canin-dog-food-medium-puppy?_pos=1&_sid=03bccee2e&_ss=r",
+          "price_hkd": "HK$272.00",
+          "price_value": 272.0,
+          "notes": "4kg variant (also 15kg on same page)"
+        },
+        {
+          "source": "legopet",
+          "seller_name": "Lego Pet",
+          "url": "https://eshop.legopet.com.hk/en/products/royal-canin-medium-junior",
+          "price_hkd": "HK$289.00",
+          "price_value": 289.0,
+          "notes": "4kg variant (also 15kg on same page)"
+        },
+        {
+          "source": "tbapet",
+          "seller_name": "TBA Pet",
+          "url": "https://www.tbapet.com/en/products/dfroc-100",
+          "price_hkd": "HK$272.00",
+          "price_value": 272.0,
+          "notes": "4kg variant (also 15kg on same page)"
+        },
+        {
+          "source": "hkdog",
+          "seller_name": "HKDog",
+          "url": "https://hkdog.com.hk/en/products/ROYAL-CANIN-%E4%B8%AD%E5%9E%8B%E5%B9%BC%E7%8A%AC%E9%85%8D%E6%96%B9-4KG.html",
+          "price_hkd": "HK$271.00",
+          "price_value": 271.0,
+          "notes": "4kg bag"
+        },
+        {
+          "source": "animalhospital",
+          "seller_name": "AnimalHospital",
+          "url": "https://www.animalhospital.com.hk/en/shop/3003150011-royal-canin-puppy-medium-for-2-12-months-dry-dog-food-15kg-13159",
+          "price_hkd": "HK$980.00",
+          "price_value": 980.0,
+          "notes": "15kg bag"
+        }
+      ],
+      "warnings": [
+        "This product is sold in 4kg and 15kg bags — prices differ.",
+        "Please confirm the bag size on the retailer's page before buying."
+      ],
+      "notes": "Demo barcode; live search cached category URLs (collections/categories). Override pins direct PDPs Jun 2026."
+    }
+  ]
+}

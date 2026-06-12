@@ -33,6 +33,22 @@ class Settings(BaseSettings):
     pinecone_dimension: int = 1536
     pinecone_namespace: str = "pet-food"
 
+    # ── Local HK retailer catalog (scraped CSV import) ─────────────────────
+    hk_catalog_enabled: bool = True
+    hk_catalog_db_path: str = "data/hk_retailer_catalog.db"
+    # Relative paths are resolved from the project root (works on any machine).
+    # Copy CSV scrapes into data/imports/hktvmall/ and data/imports/shopify/
+    # or override with absolute paths on a specific PC/VM.
+    hk_catalog_import_hktvmall_dir: str = "data/imports/hktvmall"
+    hk_catalog_import_shopify_dir: str = "data/imports/shopify"
+    hk_catalog_import_master_scrape_dir: str = "data/imports/master_scrape"
+    hk_catalog_overrides_path: str = "data/barcode_overrides.json"
+
+    # ── Dashboard metrics (persisted across API restarts) ───────────────────
+    metrics_enabled: bool = True
+    metrics_store_path: str = "data/lookup_metrics.jsonl"
+    metrics_retention_days: int = 30
+
     # ── App ────────────────────────────────────────────────────────────────
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

@@ -24,6 +24,8 @@ class LookupResult:
     product: Optional[ProductInfo]
     source: LookupSource = ""
     error: str = ""
+    timings: dict | None = None
+    catalog_stats: dict | None = None
 
 
 def is_cache_safe(product: ProductInfo) -> bool:
@@ -67,6 +69,8 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
     log.info("Live web search for %s", barcode)
     searcher = ProductSearcher()
     product = searcher.search(barcode)
+    timings = searcher.last_lookup_timings or None
+    catalog_stats = searcher.last_catalog_stats or None
 
     if not is_cache_safe(product):
         return LookupResult(
@@ -76,6 +80,8 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
                 "Product not safely identified. "
                 "No strong source evidence links this barcode to a verified product."
             ),
+            timings=timings,
+            catalog_stats=catalog_stats,
         )
 
     if redis_cache.is_available:
@@ -86,4 +92,9 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
         pinecone.upsert(product)
         log.debug("Saved to Pinecone")
 
-    return LookupResult(product=product, source="live_search")
+    return LookupResult(
+        product=product,
+        source="live_search",
+        timings=timings,
+        catalog_stats=catalog_stats,
+    )

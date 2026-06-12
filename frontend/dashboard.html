@@ -63,7 +63,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .sys-item .val{font-size:16px;font-weight:700;margin-top:4px}
 .sys-item .val.up{color:var(--green)}.sys-item .val.down{color:var(--red)}
 .nav-link-ext{margin-top:8px;padding:8px 20px;font-size:12px;color:var(--accent);text-decoration:none}
-@media(max-width:900px){.shell{grid-template-columns:1fr}.nav{display:none}.kpi-grid,.sys-grid{grid-template-columns:repeat(2,1fr)}.charts-row,.tables-row{grid-template-columns:1fr}}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.nav{display:none}.kpi-grid,.sys-grid{grid-template-columns:repeat(2,1fr)}#system.sys-grid{grid-template-columns:repeat(2,1fr)!important}.charts-row,.tables-row{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -76,6 +76,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
     <a class="nav-link" href="#overview">Overview</a>
     <a class="nav-link" href="#system">System Health</a>
     <a class="nav-link" href="#failures">Failures</a>
+    <a class="nav-link" href="#pipeline">Pipeline Timing</a>
     <a class="nav-link" href="#providers">Data Sources</a>
     <a class="nav-link" href="#activity">Recent Activity</a>
     <a class="nav-link-ext" href="/">← Back to Lookup</a>
@@ -99,12 +100,15 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
       <span id="loading-text" style="font-size:12px;color:var(--muted);display:none">Loading…</span>
     </div>
 
-    <div class="sys-grid" id="system">
+    <div class="sys-grid" id="system" style="grid-template-columns:repeat(6,1fr)">
       <div class="sys-item"><div class="label">Redis</div><div class="val" id="sys-redis">—</div></div>
       <div class="sys-item"><div class="label">Pinecone</div><div class="val" id="sys-pinecone">—</div></div>
+      <div class="sys-item"><div class="label">HK Catalog</div><div class="val" id="sys-catalog">—</div></div>
+      <div class="sys-item"><div class="label">Catalog rows</div><div class="val accent" id="sys-catalog-rows">—</div></div>
       <div class="sys-item"><div class="label">Uptime</div><div class="val accent" id="sys-uptime">—</div></div>
       <div class="sys-item"><div class="label">Events buffered</div><div class="val accent" id="sys-events">—</div></div>
     </div>
+    <div style="font-size:11px;color:var(--muted);margin:-20px 0 24px 4px" id="sys-catalog-meta">—</div>
 
     <div class="kpi-grid" id="overview">
       <div class="kpi"><div class="kpi-label">Total Searches</div><div class="kpi-value accent" id="kpi-total">—</div><div class="kpi-sub" id="kpi-window">—</div></div>
@@ -126,6 +130,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
       </div>
     </div>
 
+    <div class="table-card" id="pipeline" style="margin-bottom:32px">
+      <div class="section-title">Pipeline Timing Breakdown <span style="font-weight:400;text-transform:none">(live searches only)</span></div>
+      <table><thead><tr><th>Stage</th><th>Lookups</th><th>Avg</th><th>Max</th><th>Total</th></tr></thead><tbody id="pipeline-tbody"></tbody></table>
+    </div>
+
     <div class="tables-row" id="failures">
       <div class="table-card">
         <div class="section-title">Failure Reasons</div>
@@ -133,7 +142,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
       </div>
       <div class="table-card" id="providers">
         <div class="section-title">Data Source Performance</div>
-        <table><thead><tr><th>Source</th><th>Calls</th><th>Avg ms</th></tr></thead><tbody id="provider-tbody"></tbody></table>
+        <table><thead><tr><th>Source</th><th>Calls</th><th>Avg</th></tr></thead><tbody id="provider-tbody"></tbody></table>
       </div>
     </div>
 
@@ -151,7 +160,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
     <div class="recent-card" id="activity">
       <div class="section-title">Recent Activity <span style="font-weight:400;text-transform:none">(last 50)</span></div>
       <table>
-        <thead><tr><th>Time (UTC)</th><th>Barcode</th><th>Status</th><th>Product</th><th>Source</th><th>ms</th></tr></thead>
+        <thead><tr><th>Time (UTC)</th><th>Barcode</th><th>Status</th><th>Product</th><th>Source</th><th>Total</th><th>Pipeline</th></tr></thead>
         <tbody id="recent-tbody"></tbody>
       </table>
     </div>
@@ -190,6 +199,10 @@ function renderSystem(sys,s){
   const set=(id,val,cls)=>{const el=document.getElementById(id);el.textContent=val;el.className='val '+(cls||'accent')};
   set('sys-redis',sys.redis,sys.redis==='up'?'up':'down');
   set('sys-pinecone',sys.pinecone,sys.pinecone==='up'?'up':'down');
+  set('sys-catalog',sys.catalog||'down',sys.catalog==='up'?'up':'down');
+  document.getElementById('sys-catalog-rows').textContent=(sys.catalog_listings||0).toLocaleString();
+  const imported=sys.catalog_last_import_at?`Last import: ${sys.catalog_last_import_at.replace('T',' ').substring(0,19)} UTC · ${(sys.catalog_barcode_indexed||0).toLocaleString()} with barcode`:'Catalog not imported yet';
+  document.getElementById('sys-catalog-meta').textContent=imported;
   const h=Math.floor(s.uptime_seconds/3600),m=Math.floor((s.uptime_seconds%3600)/60);
   set('sys-uptime',h?`${h}h ${m}m`:`${m}m`);
   set('sys-events',sys.events_buffered);
@@ -214,6 +227,12 @@ function renderFailures(rows){
   tb.innerHTML=rows.map(r=>`<tr><td>${ERROR_LABELS[r.error_type]||r.error_type}${r.samples?`<div style="font-size:10px;color:var(--muted);margin-top:2px">${esc(r.samples.split(',')[0])}</div>`:''}</td><td>${r.count}</td></tr>`).join('');
 }
 
+function renderPipeline(rows){
+  const tb=document.getElementById('pipeline-tbody');
+  if(!rows.length){tb.innerHTML='<tr><td colspan="5" class="empty">No live-search timing data yet</td></tr>';return}
+  tb.innerHTML=rows.map(r=>`<tr><td><strong>${esc(r.stage)}</strong></td><td>${r.calls}</td><td>${ms(r.avg_ms)}</td><td style="color:var(--muted)">${ms(r.max_ms)}</td><td>${ms(r.total_ms)}</td></tr>`).join('');
+}
+
 function renderProviders(rows){
   const tb=document.getElementById('provider-tbody');
   if(!rows.length){tb.innerHTML='<tr><td colspan="3" class="empty">No data yet</td></tr>';return}
@@ -230,6 +249,9 @@ function renderFeatures(s){
   document.getElementById('features-tbody').innerHTML=[
     ['Products with image',s.with_image],
     ['HK retailer prices found',s.with_retailers],
+    ['Catalog barcode hits (live)',s.catalog_barcode_hits||0],
+    ['Catalog retailer candidates',s.catalog_retailer_candidates||0],
+    ['Catalog trusted HKTV listings',s.catalog_trusted_retailers||0],
     ['Unverified lookups',s.unverified],
     ['Force-refresh requests',s.force_refresh],
     ['Verification warnings',s.warnings],
@@ -238,11 +260,12 @@ function renderFeatures(s){
 
 function renderRecent(rows){
   const tb=document.getElementById('recent-tbody');
-  if(!rows.length){tb.innerHTML='<tr><td colspan="6" class="empty">No activity yet — run some lookups on the main app</td></tr>';return}
+  if(!rows.length){tb.innerHTML='<tr><td colspan="7" class="empty">No activity yet — run some lookups on the main app</td></tr>';return}
   tb.innerHTML=rows.map(r=>{
     const badge=r.success?(r.cache_hit?'<span class="badge cache">Cached</span>':'<span class="badge ok">OK</span>'):`<span class="badge fail">${ERROR_LABELS[r.error_type]||r.error_type||'fail'}</span>`;
-    const tags=[r.provider?`<span class="tag">${r.provider}</span>`:'',r.has_image?'<span class="tag">img</span>':'',r.force_refresh?'<span class="tag">refresh</span>':'',r.unverified?'<span class="tag" style="color:var(--yellow)">unverified</span>':''].join('');
-    return `<tr><td style="color:var(--muted)">${r.ts_iso.replace('T',' ').substring(0,19)}</td><td class="mono">${r.barcode_display}</td><td>${badge}</td><td>${esc(r.product_name||(r.success?'':'—'))}</td><td>${tags}</td><td style="color:var(--muted)">${ms(r.response_ms)}</td></tr>`;
+    const tags=[r.provider?`<span class="tag">${r.provider}</span>`:'',r.has_image?'<span class="tag">img</span>':'',r.force_refresh?'<span class="tag">refresh</span>':'',r.unverified?'<span class="tag" style="color:var(--yellow)">unverified</span>':'',r.catalog_trusted_retailers?`<span class="tag" style="color:var(--green)">cat×${r.catalog_trusted_retailers}</span>`:''].join('');
+    const pipe=[r.gemini_ms?`G ${ms(r.gemini_ms)}`:'',r.serpapi_ms?`S ${ms(r.serpapi_ms)}`:'',r.catalog_ms?`C ${ms(r.catalog_ms)}`:'',r.url_validation_ms?`U ${ms(r.url_validation_ms)}`:''].filter(Boolean).join(' · ')||'—';
+    return `<tr><td style="color:var(--muted)">${r.ts_iso.replace('T',' ').substring(0,19)}</td><td class="mono">${r.barcode_display}</td><td>${badge}</td><td>${esc(r.product_name||(r.success?'':'—'))}</td><td>${tags}</td><td style="color:var(--muted)">${ms(r.response_ms)}</td><td style="font-size:11px;color:var(--muted)">${pipe}</td></tr>`;
   }).join('');
 }
 
@@ -261,12 +284,13 @@ async function loadStats(){
     buildVolumeChart(data.hourly_volume);
     buildDonutChart(data.summary.successes,data.summary.failures);
     renderFailures(data.failure_breakdown);
+    renderPipeline(data.pipeline_timing||[]);
     renderProviders(data.provider_stats);
     renderTopFail(data.top_failing);
     renderFeatures(data.summary);
     renderRecent(data.recent);
     document.getElementById('last-updated').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){console.error(e);document.getElementById('recent-tbody').innerHTML=`<tr><td colspan="6" class="empty">Failed to load stats: ${esc(e.message)}</td></tr>`}
+  }catch(e){console.error(e);document.getElementById('recent-tbody').innerHTML=`<tr><td colspan="7" class="empty">Failed to load stats: ${esc(e.message)}</td></tr>`}
   finally{document.getElementById('loading-text').style.display='none'}
 }
 

@@ -18,6 +18,11 @@ dist/
 release.tar.gz
 .cursorignore
 .cache/
+data/*.db
+data/*.db-journal
+data/lookup_metrics.jsonl
+data/lookup_metrics.jsonl.tmp
+data/imports/**/*.csv
 
 # Large generated archives that aren't useful to the assistant
 *.zip
