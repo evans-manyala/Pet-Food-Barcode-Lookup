@@ -36,8 +36,8 @@ preflight_github_ssh
 COMPOSE_FILES=(-f docker-compose.yml)
 if [[ "$USE_NGINX" == "true" ]]; then
   COMPOSE_FILES+=(-f docker-compose.prod.yml)
-  # Port binding comes from docker-compose.prod.yml (127.0.0.1:8000). Do not set APP_PORT here.
 else
+  COMPOSE_FILES+=(-f docker-compose.direct.yml)
   export APP_PORT="${APP_PORT:-80}"
 fi
 

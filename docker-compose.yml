@@ -2,8 +2,6 @@ services:
   app:
     build: .
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-80}:8000"
     env_file:
       - .env
     environment:
