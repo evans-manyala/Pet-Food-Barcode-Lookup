@@ -149,11 +149,25 @@ Add these secrets:
 
 | Secret | Value |
 |--------|-------|
-| `VM_HOST` | `api.mindmycat.com` |
+| `VM_HOST` | **GCP VM external IP** (not `api.mindmycat.com`) — see below |
 | `VM_USER` | your VM username from Step 13c |
 | `VM_SSH_KEY` | entire contents of `~/.ssh/pet-food-deploy` (private key) |
 | `VM_APP_DIR` | `/home/<VM_USER>/pet-food-barcode-lookup` |
 | `USE_NGINX` | `true` |
+| `VM_SSH_PORT` | optional; default `22` |
+
+**Important:** `api.mindmycat.com` is behind Cloudflare (HTTP/HTTPS only). GitHub Actions SSH **must** use the VM’s direct public IP, or a DNS-only (grey-cloud) hostname that points at that IP.
+
+Get the VM IP on your Mac:
+
+```bash
+gcloud compute instances describe pet-food-lookup \
+  --zone=us-central1-a \
+  --project=project-11d80abc-a7c0-43df-9ed \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+```
+
+Set `VM_HOST` to that IP (e.g. `34.133.118.0`). Keep `api.mindmycat.com` for browsers only — not for SSH deploy.
 
 To copy the private key:
 
@@ -239,7 +253,8 @@ Part 4 — Domain + CI/CD (this file)
 
 | Issue | Fix |
 |-------|-----|
-| GitHub Actions SSH fails | Check `VM_HOST`, `VM_USER`, `VM_SSH_KEY`; test with `ssh -i ~/.ssh/pet-food-deploy USER@HOST` |
+| GitHub Actions SSH fails (`dial tcp …:22: i/o timeout`) | `VM_HOST` likely points at Cloudflare (proxied domain). Use the VM **external IP** from `gcloud compute instances describe … natIP`, not `api.mindmycat.com`. Test: `ssh -i ~/.ssh/pet-food-deploy USER@VM_IP` |
+| GitHub Actions SSH fails (other) | Check `VM_USER`, `VM_SSH_KEY`; GCP firewall allows `tcp:22`; VM is running |
 | `git pull` fails in Actions | VM needs deploy key (DEPLOY.md Step 9) — CI/CD only pulls, doesn't clone |
 | Certbot fails | DNS must resolve to VM IP first (`dig +short api.mindmycat.com`) |
 | 502 Bad Gateway | `sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml ps` — app must be up on `127.0.0.1:8000` |

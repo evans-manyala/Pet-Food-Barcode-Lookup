@@ -13,14 +13,55 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Preflight SSH target
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_SSH_PORT: ${{ secrets.VM_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VM_HOST}" ]]; then
+            echo "::error::GitHub secret VM_HOST is not set."
+            exit 1
+          fi
+
+          PORT="${VM_SSH_PORT:-22}"
+          RESOLVED="$(getent ahostsv4 "${VM_HOST}" | awk '{print $1; exit}' || true)"
+          if [[ -z "${RESOLVED}" ]]; then
+            echo "::error::Could not resolve VM_HOST=${VM_HOST}"
+            exit 1
+          fi
+          echo "VM_HOST=${VM_HOST} resolves to ${RESOLVED} (port ${PORT})"
+
+          # Cloudflare anycast ranges — HTTP(S) only; SSH must use the VM IP directly.
+          if [[ "${RESOLVED}" =~ ^104\.(1[6-9]|2[0-9]|3[0-1])\. ]] \
+            || [[ "${RESOLVED}" =~ ^172\.(6[4-9]|7[01])\. ]] \
+            || [[ "${RESOLVED}" =~ ^162\.158\. ]] \
+            || [[ "${RESOLVED}" =~ ^141\.101\. ]]; then
+            echo "::error::VM_HOST resolves to Cloudflare (${RESOLVED})."
+            echo "Use the GCP VM external IP for SSH, not a Cloudflare-proxied domain."
+            echo "Example: gcloud compute instances describe pet-food-lookup --zone=us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)'"
+            exit 1
+          fi
+
+          if ! timeout 15 bash -c "echo >/dev/tcp/${VM_HOST}/${PORT}"; then
+            echo "::error::Cannot reach ${VM_HOST}:${PORT} from GitHub Actions."
+            echo "Check that the VM is running, sshd is up, and GCP firewall allows tcp:${PORT}."
+            exit 1
+          fi
+          echo "SSH port ${PORT} reachable on ${VM_HOST}"
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          timeout: 30s
+          command_timeout: 15m
           script_stop: true
           script: |
+            set -euo pipefail
             export APP_DIR="${{ secrets.VM_APP_DIR }}"
             export USE_NGINX="${{ secrets.USE_NGINX }}"
             if [[ -z "$APP_DIR" ]]; then APP_DIR="$HOME/pet-food-barcode-lookup"; fi
