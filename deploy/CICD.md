@@ -252,6 +252,16 @@ Or from GitHub: **Actions** → **Deploy to GCP VM** → **Run workflow**.
 | `https://api.mindmycat.com/` | Main UI |
 | `https://api.mindmycat.com/?barcode=9003579008331` | Pre-filled demo |
 | `https://api.mindmycat.com/api/health` | API health check |
+| `http://34.133.118.0/api/lookup?barcode=9003579008331` | API demo (IP, until HTTPS is live) |
+
+**API reference:** [docs/API.md](../docs/API.md)
+
+**Postman (share these files):**
+
+1. [postman/Pet-Food-Barcode-Lookup.postman_collection.json](../postman/Pet-Food-Barcode-Lookup.postman_collection.json)
+2. [postman/environments/Production.postman_environment.json](../postman/environments/Production.postman_environment.json) — update `base_url` when HTTPS is live
+
+Import instructions: [postman/README.md](../postman/README.md)
 
 ---
 
