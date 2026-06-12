@@ -17,8 +17,11 @@ preflight_github_ssh() {
   fi
 
   echo "==> Checking GitHub SSH access (required for git pull)..."
-  if ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 \
-    | tee /dev/stderr | grep -qi 'successfully authenticated'; then
+  # ssh -T exits 1 even on success ("does not provide shell access") — ignore exit code.
+  local ssh_out
+  ssh_out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 || true)"
+  echo "$ssh_out" >&2
+  if echo "$ssh_out" | grep -qi 'successfully authenticated'; then
     echo "GitHub SSH OK"
     return 0
   fi
