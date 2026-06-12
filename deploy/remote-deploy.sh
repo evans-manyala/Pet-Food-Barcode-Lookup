@@ -8,6 +8,30 @@ USE_NGINX="${USE_NGINX:-true}"
 
 cd "$APP_DIR"
 
+preflight_github_ssh() {
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [[ "$remote_url" != git@github.com:* && "$remote_url" != ssh://git@github.com/* ]]; then
+    echo "==> Origin is not a GitHub SSH remote; skipping GitHub SSH preflight."
+    return 0
+  fi
+
+  echo "==> Checking GitHub SSH access (required for git pull)..."
+  if ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 \
+    | tee /dev/stderr | grep -qi 'successfully authenticated'; then
+    echo "GitHub SSH OK"
+    return 0
+  fi
+
+  echo ""
+  echo "ERROR: GitHub SSH authentication failed on the VM."
+  echo "The repo uses git@github.com but this user has no deploy key configured."
+  echo "Fix: deploy/CICD.md Step 13.5 (or deploy/DEPLOY.md Step 9)."
+  exit 1
+}
+
+preflight_github_ssh
+
 echo "==> Pulling latest $BRANCH..."
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"

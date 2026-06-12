@@ -137,7 +137,48 @@ Note the username (often your Mac username, e.g. `evansmanyala`). This is `VM_US
 ssh -i ~/.ssh/pet-food-deploy <VM_USER>@<VM_IP>
 ```
 
-If that connects, GitHub Actions will work.
+If that connects, GitHub Actions can SSH into the VM.
+
+---
+
+## Step 13.5. VM deploy key for `git pull` (on the VM)
+
+GitHub Actions SSHs into the VM successfully, but **`deploy/remote-deploy.sh` runs `git pull` on the VM**. The VM must authenticate to GitHub separately (different key from Step 13).
+
+If CI/CD fails with `git@github.com: Permission denied (publickey)`, complete this step.
+
+SSH into the VM, then:
+
+```bash
+# 1. Create a deploy key (skip if ~/.ssh/github_deploy already exists)
+ssh-keygen -t ed25519 -C "vm-git-pull" -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub
+```
+
+Copy the public key. On GitHub → repo **Settings** → **Deploy keys** → **Add deploy key** (read-only, no write access needed).
+
+Back on the VM:
+
+```bash
+ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+chmod 600 ~/.ssh/known_hosts
+
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/github_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config ~/.ssh/github_deploy
+
+ssh -T git@github.com
+cd ~/pet-food-barcode-lookup && git pull origin main
+```
+
+Expected: `Hi evans-manyala/Pet-Food-Barcode-Lookup! You've successfully authenticated…` then a clean pull.
+
+> **Note:** Step 13 (`pet-food-deploy`) lets GitHub Actions reach the VM. Step 13.5 (`github_deploy`) lets the VM reach GitHub. Both keys are required.
 
 ---
 
@@ -241,7 +282,8 @@ Part 4 — Domain + CI/CD (this file)
 [ ] Step 11 — DNS A record api → VM IP
 [ ] Step 12 — setup-domain.sh + firewall 443
 [ ]          — https://api.mindmycat.com/api/health OK
-[ ] Step 13 — GitHub Actions SSH key on VM
+[ ] Step 13  — GitHub Actions SSH key on VM (Actions → VM)
+[ ] Step 13.5 — VM deploy key for git pull (VM → GitHub)
 [ ] Step 14 — GitHub secrets set
 [ ] Step 15 — git push → Actions deploy green
 [ ] Step 16 — Share URL with testers
@@ -255,7 +297,7 @@ Part 4 — Domain + CI/CD (this file)
 |-------|-----|
 | GitHub Actions SSH fails (`dial tcp …:22: i/o timeout`) | `VM_HOST` likely points at Cloudflare (proxied domain). Use the VM **external IP** from `gcloud compute instances describe … natIP`, not `api.mindmycat.com`. Test: `ssh -i ~/.ssh/pet-food-deploy USER@VM_IP` |
 | GitHub Actions SSH fails (other) | Check `VM_USER`, `VM_SSH_KEY`; GCP firewall allows `tcp:22`; VM is running |
-| `git pull` fails in Actions | VM needs deploy key (DEPLOY.md Step 9) — CI/CD only pulls, doesn't clone |
+| `git pull` fails (`Permission denied (publickey)`) | VM → GitHub deploy key missing or not in `~/.ssh/config`. Complete **Step 13.5** (not Step 13 — that key is only for Actions → VM SSH). Test on VM: `ssh -T git@github.com` then `git pull origin main` |
 | Certbot fails | DNS must resolve to VM IP first (`dig +short api.mindmycat.com`) |
 | 502 Bad Gateway | `sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml ps` — app must be up on `127.0.0.1:8000` |
 | Port 80 conflict | `sudo docker compose down` then re-run `setup-domain.sh` |
