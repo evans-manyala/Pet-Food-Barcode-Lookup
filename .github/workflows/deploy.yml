@@ -66,4 +66,9 @@ jobs:
             export USE_NGINX="${{ secrets.USE_NGINX }}"
             if [[ -z "$APP_DIR" ]]; then APP_DIR="$HOME/pet-food-barcode-lookup"; fi
             if [[ -z "$USE_NGINX" ]]; then USE_NGINX="true"; fi
+            # Bootstrap: pull latest script before remote-deploy (unblocks deploy when VM has an older remote-deploy.sh).
+            cd "$APP_DIR"
+            git fetch origin main
+            git checkout main
+            git pull origin main
             bash "$APP_DIR/deploy/remote-deploy.sh"

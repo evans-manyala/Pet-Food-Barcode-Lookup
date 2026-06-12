@@ -300,7 +300,8 @@ Part 4 — Domain + CI/CD (this file)
 | `git pull` fails (`Permission denied (publickey)`) | VM → GitHub deploy key missing or not in `~/.ssh/config`. Complete **Step 13.5** (not Step 13 — that key is only for Actions → VM SSH). Test on VM: `ssh -T git@github.com` then `git pull origin main` |
 | Certbot fails | DNS must resolve to VM IP first (`dig +short api.mindmycat.com`) |
 | 502 Bad Gateway | `sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml ps` — app must be up on `127.0.0.1:8000` |
-| `bind: address already in use` on `127.0.0.1:8000` | Usually duplicate compose port mappings (base + prod both binding `:8000`). On VM: `docker compose -f docker-compose.yml -f docker-compose.prod.yml down` then `git pull` and re-run deploy. Ensure `USE_NGINX=true` does **not** set `APP_PORT=8000` in `remote-deploy.sh` (fixed in repo). |
+| `bind: address already in use` on `127.0.0.1:8000` | Duplicate port mappings — use `docker-compose.prod.yml` (nginx) or `docker-compose.direct.yml` (public), not both. Run `compose down` then redeploy. |
+| App shows `8000/tcp` only (no `127.0.0.1:8000->8000`) | Port overlay missing — nginx deploy needs `-f docker-compose.yml -f docker-compose.prod.yml`. Do not rely on `ports: !reset` (unsupported on some Compose builds). |
 | Port 80 conflict | `sudo docker compose down` then re-run `setup-domain.sh` |
 | Lookup timeout in browser | Normal — live search takes 30–90s; nginx timeout is 300s |
 | Cert renewal | certbot installs a cron job automatically; check `sudo certbot renew --dry-run` |

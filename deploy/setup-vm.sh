@@ -35,7 +35,7 @@ fi
 
 cd "$APP_DIR"
 
-COMPOSE_FILES=(-f docker-compose.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.direct.yml)
 if [[ "$PLATFORM" == "ec2" ]]; then
   if [[ ! -f "${GCP_SA_KEY_PATH:-$APP_DIR/deploy/gcp-sa-key.json}" ]]; then
     echo "ERROR: EC2 requires a GCP service account key at deploy/gcp-sa-key.json"
