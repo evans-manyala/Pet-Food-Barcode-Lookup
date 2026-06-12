@@ -30,7 +30,6 @@ sudo ufw allow 'Nginx Full' || sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
 
 echo "==> Starting app on localhost:8000 (behind nginx)..."
 cd "$APP_DIR"
-export APP_PORT=8000
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
 if [[ -f deploy/gcp-sa-key.json ]]; then
   COMPOSE_FILES+=(-f docker-compose.ec2.yml)
