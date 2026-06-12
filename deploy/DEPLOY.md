@@ -129,12 +129,22 @@ cat ~/.ssh/github_deploy.pub
 
 Add that public key in GitHub → repo **Settings** → **Deploy keys** → **Add deploy key** (read-only).
 
-Then on the VM:
+Then on the VM (SSH config so `git pull` works in non-interactive CI/CD sessions):
 
 ```bash
-eval "$(ssh-agent -s)"
-ssh-add ~/.ssh/github_deploy
-ssh-keyscan github.com >> ~/.ssh/known_hosts
+ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+chmod 600 ~/.ssh/known_hosts
+
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/github_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config ~/.ssh/github_deploy
+
+ssh -T git@github.com   # expect: "successfully authenticated" (exit code 1 is OK)
 
 git clone git@github.com:evans-manyala/Pet-Food-Barcode-Lookup.git ~/pet-food-barcode-lookup
 cd ~/pet-food-barcode-lookup
