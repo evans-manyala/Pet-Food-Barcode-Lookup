@@ -40,7 +40,7 @@ git pull origin "$BRANCH"
 COMPOSE_FILES=(-f docker-compose.yml)
 if [[ "$USE_NGINX" == "true" ]]; then
   COMPOSE_FILES+=(-f docker-compose.prod.yml)
-  export APP_PORT=8000
+  # Port binding comes from docker-compose.prod.yml (127.0.0.1:8000). Do not set APP_PORT here.
 else
   export APP_PORT="${APP_PORT:-80}"
 fi
@@ -48,6 +48,9 @@ fi
 if [[ -f deploy/gcp-sa-key.json ]]; then
   COMPOSE_FILES+=(-f docker-compose.ec2.yml)
 fi
+
+echo "==> Stopping existing containers (frees ports when switching layouts)..."
+docker compose "${COMPOSE_FILES[@]}" down --remove-orphans
 
 echo "==> Rebuilding and restarting containers..."
 docker compose "${COMPOSE_FILES[@]}" up -d --build

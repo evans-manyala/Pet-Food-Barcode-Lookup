@@ -3,5 +3,6 @@
 
 services:
   app:
-    ports:
+    # Replace (not append) base ports — otherwise APP_PORT=8000 + this line double-binds :8000.
+    ports: !reset
       - "127.0.0.1:8000:8000"

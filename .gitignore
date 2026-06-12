@@ -24,6 +24,10 @@ data/lookup_metrics.jsonl
 data/lookup_metrics.jsonl.tmp
 data/imports/**/*.csv
 
+
+redis-cache-export.*
+redis-dump.rdb
+
 # Large generated archives that aren't useful to the assistant
 *.zip
 
