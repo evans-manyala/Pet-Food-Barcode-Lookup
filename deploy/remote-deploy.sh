@@ -8,24 +8,22 @@ USE_NGINX="${USE_NGINX:-true}"
 
 cd "$APP_DIR"
 
+echo "==> Pulling latest $BRANCH..."
+git fetch origin "$BRANCH"
+git checkout "$BRANCH"
+git pull origin "$BRANCH"
+
 preflight_github_ssh() {
   local remote_url
   remote_url="$(git remote get-url origin 2>/dev/null || true)"
   if [[ "$remote_url" != git@github.com:* && "$remote_url" != ssh://git@github.com/* ]]; then
-    echo "==> Origin is not a GitHub SSH remote; skipping GitHub SSH preflight."
     return 0
   fi
-
-  echo "==> Checking GitHub SSH access (required for git pull)..."
-  # ssh -T exits 1 even on success ("does not provide shell access") — ignore exit code.
-  local ssh_out
-  ssh_out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 || true)"
-  echo "$ssh_out" >&2
-  if echo "$ssh_out" | grep -qi 'successfully authenticated'; then
+  # git ls-remote uses the same SSH credentials as pull; avoids ssh -T exit-code quirks.
+  if git ls-remote --heads origin "$BRANCH" &>/dev/null; then
     echo "GitHub SSH OK"
     return 0
   fi
-
   echo ""
   echo "ERROR: GitHub SSH authentication failed on the VM."
   echo "The repo uses git@github.com but this user has no deploy key configured."
@@ -34,11 +32,6 @@ preflight_github_ssh() {
 }
 
 preflight_github_ssh
-
-echo "==> Pulling latest $BRANCH..."
-git fetch origin "$BRANCH"
-git checkout "$BRANCH"
-git pull origin "$BRANCH"
 
 COMPOSE_FILES=(-f docker-compose.yml)
 if [[ "$USE_NGINX" == "true" ]]; then
