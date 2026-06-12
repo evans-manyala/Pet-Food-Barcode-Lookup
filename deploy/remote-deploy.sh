@@ -9,9 +9,27 @@ USE_NGINX="${USE_NGINX:-true}"
 cd "$APP_DIR"
 
 echo "==> Pulling latest $BRANCH..."
-git fetch origin "$BRANCH"
+if ! git fetch origin "$BRANCH"; then
+  ORIGIN_URL="$(git remote get-url origin)"
+  HTTPS_URL=""
+
+  if [[ "$ORIGIN_URL" =~ ^git@github\.com:(.+)$ ]]; then
+    HTTPS_URL="https://github.com/${BASH_REMATCH[1]}"
+  elif [[ "$ORIGIN_URL" =~ ^ssh://git@github\.com/(.+)$ ]]; then
+    HTTPS_URL="https://github.com/${BASH_REMATCH[1]}"
+  fi
+
+  if [[ -z "$HTTPS_URL" ]]; then
+    echo "ERROR: git fetch failed and origin URL is not a supported GitHub SSH URL: $ORIGIN_URL"
+    exit 1
+  fi
+
+  echo "==> SSH fetch failed; switching origin to HTTPS and retrying..."
+  git remote set-url origin "$HTTPS_URL"
+  git fetch origin "$BRANCH"
+fi
 git checkout "$BRANCH"
-git pull origin "$BRANCH"
+git pull --ff-only origin "$BRANCH"
 
 COMPOSE_FILES=(-f docker-compose.yml)
 if [[ "$USE_NGINX" == "true" ]]; then
