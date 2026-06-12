@@ -13,9 +13,11 @@ or poison Redis/Pinecone with the wrong identity.
 
 Pipeline
 --------
-  Step 1  Global exact barcode product identity search
-          - Product name/brand/animal/size require barcode/SKU evidence
-          - Local HK catalog (HKTVmall URL barcode index) supplements rescue
+  Step 1  Catalog-first product identity
+          - Curated barcode_overrides.json (highest priority)
+          - Trusted local HK catalog (2+ agreeing hits = high; 1 hit = medium)
+          - Conflicting trusted catalog hits → low confidence, not cached
+          - Then global Vertex/SerpAPI search with catalog cross-check
   Step 2  Global nutrition search
           - Manufacturer, brand, distributor, catalog, retailer, or label evidence
   Step 3  Global product image search
@@ -51,8 +53,23 @@ from google import genai
 from google.genai import types
 
 from .catalog import get_catalog_store
+from .catalog.identity import (
+    catalog_conflicts_with_verified_identity,
+    listing_matches_product_variant,
+    trusted_barcode_hits,
+)
+from .catalog.overrides import (
+    get_barcode_override,
+    override_to_identity_dict,
+    override_to_retailer_dicts,
+)
 from .config import get_settings
 from .models import ProductInfo, NutritionalInfo, RetailerListing
+from .user_warnings import (
+    extraction_failed_user_warnings,
+    unverified_barcode_user_warnings,
+    warnings_for_ui,
+)
 from .timing import (
     LookupTimer,
     activate_lookup_timer,
@@ -390,13 +407,58 @@ def _filter_urls(urls: list[str], domains: Iterable[str]) -> list[str]:
     return out
 
 
+_NON_PRODUCT_PATH_SEGMENTS = frozenset({
+    "categories", "category", "collections", "collection",
+    "catalog", "search", "shop", "stores", "brands", "brand",
+    "tags", "tag", "pages", "blogs", "blog", "cart", "checkout",
+    "account", "login", "register", "wishlist",
+})
+_LOCALE_PREFIXES = frozenset({"en", "zh", "tc", "hk", "zh-hant", "zh-hans"})
+# Shopline HK stores expose PDPs under /products/<slug>; /categories/ is browse-only.
+_SHOPLINE_PDP_HOSTS = frozenset({
+    "meow9.com",
+    "petsorder.com.hk",
+    "petmarket.com.hk",
+    "petshack.hk",
+    "tbapet.com",
+    "eshop.legopet.com.hk",
+    "hkdog.com.hk",
+})
+
+
+def _normalise_host(host: str) -> str:
+    return (host or "").lower().removeprefix("www.")
+
+
 def _looks_like_product_url(url: str) -> bool:
     try:
-        path = urlparse(url).path.strip("/").lower()
+        parsed = urlparse(url)
+        path = parsed.path.strip("/").lower()
         if not path or path in {"en", "zh", "tc", "hk", "products", "product", "search"}:
             return False
-        if "search" in path and "query" in urlparse(url).query.lower():
+        if "search" in path and "query" in parsed.query.lower():
             return False
+
+        segments = [s for s in path.split("/") if s]
+        if not segments:
+            return False
+
+        host = _normalise_host(parsed.netloc)
+        browse_idx = 1 if segments[0] in _LOCALE_PREFIXES and len(segments) > 1 else 0
+        if segments[browse_idx] in _NON_PRODUCT_PATH_SEGMENTS:
+            # AnimalHospital Odoo storefront: /en/shop/<sku>-<slug>
+            if (
+                host.endswith("animalhospital.com.hk")
+                and segments[browse_idx] == "shop"
+                and len(segments) > browse_idx + 1
+                and re.match(r"^\d{6,}-", segments[browse_idx + 1])
+            ):
+                return True
+            return False
+
+        if host in _SHOPLINE_PDP_HOSTS and "products" not in segments:
+            return False
+
         return len(path) >= 5
     except Exception:
         return False
@@ -1782,10 +1844,36 @@ def _strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _filter_hkd_price_outliers(candidates: list[float]) -> list[float]:
+    """
+    Drop site-wide promo / add-on prices on multi-SKU Shopline pages.
+
+    Example: Royal Canin STL37 page lists HK$220 (2kg) but also HK$48 Naturea
+    add-on and HK$8 header promos — min() alone returns the wrong value.
+    """
+    if len(candidates) <= 1:
+        return candidates
+
+    filtered = [val for val in candidates if val >= 20]
+    if not filtered:
+        filtered = list(candidates)
+
+    peak = max(filtered)
+    if peak >= 100:
+        # Keep prices within ~20% of the largest plausible product price on page.
+        floor = peak * 0.2
+        pruned = [val for val in filtered if val >= floor]
+        if pruned:
+            filtered = pruned
+
+    return filtered
+
+
 def _extract_hkd_price(text: str) -> str | None:
     """
     Extract a plausible HKD price from retailer HTML/text. When both original
-    and special prices appear, prefer the lowest plausible positive price.
+    and special prices appear, prefer the lowest plausible positive price
+    after filtering add-on / promo outliers.
     """
     plain = _strip_html(text)
     candidates: list[float] = []
@@ -1812,6 +1900,7 @@ def _extract_hkd_price(text: str) -> str | None:
     if not candidates:
         return None
 
+    candidates = _filter_hkd_price_outliers(candidates)
     price = min(candidates)
     return f"HK${price:.2f}"
 
@@ -2937,9 +3026,7 @@ class ProductSearcher:
                 "identity_confidence": "low",
                 "barcode_evidence": None,
                 "evidence_urls": public_urls,
-                "warnings": [
-                    "Gemini returned malformed/truncated JSON during product extraction; result was not cached."
-                ],
+                "warnings": extraction_failed_user_warnings(),
                 "product_name": None,
                 "brand": None,
                 "target_animal": None,
@@ -2980,7 +3067,7 @@ class ProductSearcher:
         warnings = data.get("warnings") or []
         if isinstance(warnings, str):
             warnings = [warnings]
-        data["warnings"] = [str(w)[:300] for w in warnings[:5]]
+        data["warnings"] = warnings_for_ui([str(w)[:300] for w in warnings[:5]])
 
         data["target_animal"] = _coerce_target_animal(data.get("target_animal"))
 
@@ -2994,12 +3081,75 @@ class ProductSearcher:
             and bool(data.get("product_name"))
         )
 
+    def _cross_check_catalog_identity(self, barcode: str, data: dict) -> dict:
+        """Downgrade live-search identity when trusted catalog disagrees."""
+        catalog_store = get_catalog_store()
+        if not catalog_store.is_available or not self._is_verified(data):
+            return data
+
+        trusted = trusted_barcode_hits(barcode, catalog_store.find_by_barcode(barcode))
+        reason = catalog_conflicts_with_verified_identity(
+            barcode,
+            trusted,
+            data.get("brand"),
+            data.get("product_name"),
+            data.get("target_animal"),
+        )
+        if not reason:
+            return data
+
+        log.warning("Catalog cross-check failed for %s: %s", barcode, reason)
+        warnings = list(data.get("warnings") or [])
+        warnings.append(reason)
+        return {
+            **data,
+            "barcode_verified": False,
+            "identity_confidence": "low",
+            "warnings": warnings,
+        }
+
     def _fetch_product_info(
         self,
         barcode: str,
         serpapi_budget: SerpApiBudget | None = None,
     ) -> tuple[dict, str]:
         log.info("Phase 1 – exact product identity verification (barcode=%s) …", barcode)
+
+        # ── Curated barcode overrides (highest priority) ─────────────────────
+        override = get_barcode_override(barcode)
+        if override:
+            facts = (
+                "--- BARCODE OVERRIDE ---\n"
+                + (override.barcode_evidence or f"Curated override for {barcode}.")
+            )
+            log.info("Using curated barcode override for %s", barcode)
+            if override.notes:
+                log.info("Barcode override %s internal notes: %s", barcode, override.notes)
+            return override_to_identity_dict(override), facts
+
+        # ── Catalog-first identity (trusted local sources) ───────────────────
+        catalog_store = get_catalog_store()
+        if catalog_store.is_available:
+            timer = get_lookup_timer()
+            if timer:
+                with timer.measure("catalog"):
+                    catalog_result = catalog_store.resolve_barcode_identity(barcode)
+            else:
+                catalog_result = catalog_store.resolve_barcode_identity(barcode)
+            self.last_catalog_stats["barcode_hits"] = len(catalog_result.trusted_hits)
+            if catalog_result.status == "conflict":
+                log.warning(
+                    "Catalog identity conflict for %s — refusing to verify",
+                    barcode,
+                )
+                return catalog_result.data or {}, catalog_result.facts
+            if catalog_result.status == "resolved" and catalog_result.data:
+                log.info(
+                    "Catalog-first identity for %s (%s)",
+                    barcode,
+                    catalog_result.data.get("identity_confidence"),
+                )
+                return catalog_result.data, catalog_result.facts
 
         facts_1, urls_1, _ = self._grounded_search(
             _PRODUCT_SEARCH_PROMPT.format(
@@ -3008,6 +3158,7 @@ class ProductSearcher:
             )
         )
         data = self._extract_product_json(barcode, facts_1, urls_1)
+        data = self._cross_check_catalog_identity(barcode, data)
         if self._is_verified(data):
             return data, facts_1
 
@@ -3046,39 +3197,10 @@ class ProductSearcher:
         merged_facts = facts_1 + "\n\n--- RESCUE SEARCH ---\n\n" + facts_2
         merged_urls = list(dict.fromkeys(urls_1 + urls_2))
         data = self._extract_product_json(barcode, merged_facts, merged_urls)
+        data = self._cross_check_catalog_identity(barcode, data)
 
         if self._is_verified(data):
             return data, merged_facts
-
-        # ── Local HK catalog barcode evidence (HKTVmall URL index) ───────────
-        catalog_store = get_catalog_store()
-        if catalog_store.is_available:
-            timer = get_lookup_timer()
-            if timer:
-                with timer.measure("catalog"):
-                    catalog_hits = catalog_store.find_by_barcode(barcode)
-            else:
-                catalog_hits = catalog_store.find_by_barcode(barcode)
-            self.last_catalog_stats["barcode_hits"] = len(catalog_hits)
-            if catalog_hits:
-                log.info(
-                    "Local HK catalog: %d barcode hit(s) for %s — trying identity extraction",
-                    len(catalog_hits),
-                    barcode,
-                )
-                catalog_facts, catalog_urls = catalog_store.format_identity_evidence(
-                    barcode, catalog_hits,
-                )
-                if catalog_facts or catalog_urls:
-                    merged_facts = (
-                        merged_facts
-                        + "\n\n--- LOCAL HK CATALOG (BARCODE) ---\n\n"
-                        + catalog_facts
-                    )
-                    merged_urls = list(dict.fromkeys(merged_urls + catalog_urls))
-                    data = self._extract_product_json(barcode, merged_facts, merged_urls)
-                    if self._is_verified(data):
-                        return data, merged_facts
 
         # ── SerpAPI Google AI Mode identity rescue ────────────────────────────
         log.warning(
@@ -3101,6 +3223,7 @@ class ProductSearcher:
             )
             merged_urls = list(dict.fromkeys(merged_urls + ai_urls))
             data = self._extract_product_json(barcode, merged_facts, merged_urls)
+            data = self._cross_check_catalog_identity(barcode, data)
 
         if not self._is_verified(data):
             log.warning(
@@ -3125,13 +3248,15 @@ class ProductSearcher:
                 )
                 merged_urls = list(dict.fromkeys(merged_urls + search_urls))
                 data = self._extract_product_json(barcode, merged_facts, merged_urls)
+                data = self._cross_check_catalog_identity(barcode, data)
 
         if not self._is_verified(data):
-            warnings = data.get("warnings") or []
-            warnings.append(
-                "Barcode identity was not verified from source evidence; result was not saved to cache/vector store."
+            log.info(
+                "Barcode %s identity not verified from source evidence; result not cached.",
+                barcode,
             )
-            data["warnings"] = warnings
+            existing = warnings_for_ui(data.get("warnings") or [])
+            data["warnings"] = existing or unverified_barcode_user_warnings()
 
         return data, merged_facts
 
@@ -3209,6 +3334,15 @@ class ProductSearcher:
                 continue
             if not _looks_like_product_url(url):
                 log.info("  Dropping non-product URL: %s", url)
+                continue
+
+            variant_blob = " ".join(filter(None, [
+                url,
+                str(item.get("retailer_name") or ""),
+                str(item.get("notes") or ""),
+            ]))
+            if not listing_matches_product_variant(variant_blob, product_name, brand):
+                log.info("  Dropping retailer URL due to recipe/variant mismatch: %s", url)
                 continue
 
             if item.get("catalog_trusted"):
@@ -3798,6 +3932,7 @@ Rules:
         barcode: str,
         product_name: str,
         brand: str,
+        target_animal: str = "",
         serpapi_budget: SerpApiBudget | None = None,
     ) -> list[RetailerListing]:
         valid: list[RetailerListing] = []
@@ -3813,12 +3948,14 @@ Rules:
                         brand=brand or "",
                         product_name=product_name,
                         barcode=barcode,
+                        target_animal=target_animal or "",
                     )
             else:
                 catalog_listings = catalog_store.find_retailers_by_product(
                     brand=brand or "",
                     product_name=product_name,
                     barcode=barcode,
+                    target_animal=target_animal or "",
                 )
             self.last_catalog_stats["retailer_candidates"] = len(catalog_listings)
             catalog_candidates = catalog_store.to_retailer_candidates(
@@ -4002,9 +4139,8 @@ Rules:
                 identity_confidence="low",
                 evidence_urls=prod_data.get("evidence_urls") or [],
                 barcode_evidence=prod_data.get("barcode_evidence"),
-                warnings=prod_data.get("warnings") or [
-                    "No exact source evidence connected this barcode to a product."
-                ],
+                warnings=warnings_for_ui(prod_data.get("warnings"))
+                or unverified_barcode_user_warnings(),
                 raw_llm_response=raw_facts[:12000],
             )
 
@@ -4054,8 +4190,22 @@ Rules:
             barcode=barcode,
             product_name=product_name,
             brand=brand,
+            target_animal=target_animal or "",
             serpapi_budget=serpapi_budget,
         )
+
+        override = get_barcode_override(barcode)
+        if override:
+            existing_urls = {r.url for r in retailers}
+            override_candidates = override_to_retailer_dicts(override)
+            if override_candidates:
+                for listing in self._validate_retailers(
+                    override_candidates, barcode, product_name, brand, "",
+                ):
+                    if listing.url not in existing_urls:
+                        retailers.append(listing)
+                        existing_urls.add(listing.url)
+            retailers.sort(key=lambda r: float(re.sub(r"[^\d.]", "", r.price_hkd or "9999") or 9999))
 
         return ProductInfo(
             barcode=barcode,
@@ -4070,6 +4220,6 @@ Rules:
             identity_confidence=prod_data.get("identity_confidence", "medium"),
             evidence_urls=prod_data.get("evidence_urls") or [],
             barcode_evidence=prod_data.get("barcode_evidence"),
-            warnings=prod_data.get("warnings") or [],
+            warnings=warnings_for_ui(prod_data.get("warnings")),
             raw_llm_response=raw_facts[:12000],
         )

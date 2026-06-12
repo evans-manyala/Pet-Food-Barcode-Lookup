@@ -34,6 +34,8 @@ from src.catalog.importers import (
     import_shopify_dir,
     parse_master_scrape_csv,
 )
+from src.catalog.enrich import dedupe_and_enrich_listings
+from src.catalog.overrides import overrides_to_catalog_listings
 from src.catalog.paths import (
     DEFAULT_HKTVMALL_IMPORT_DIR,
     DEFAULT_MASTER_SCRAPE_IMPORT_DIR,
@@ -159,6 +161,11 @@ def main() -> int:
     else:
         log.warning("Master scrape directory not found (skipped): %s", master_scrape_dir)
 
+    override_listings = overrides_to_catalog_listings()
+    if override_listings:
+        log.info("Loaded %d barcode override listing(s)", len(override_listings))
+        listings.extend(override_listings)
+
     if not listings:
         log.error(
             "No listings parsed. Copy CSV scrapes into:\n"
@@ -171,10 +178,7 @@ def main() -> int:
         )
         return 1
 
-    by_url: dict[str, object] = {}
-    for item in listings:
-        by_url[item.product_url] = item
-    unique = list(by_url.values())
+    unique = dedupe_and_enrich_listings(listings)
 
     db_path = args.db_path or Path(cfg.hk_catalog_db_path)
     if not db_path.is_absolute():

@@ -72,4 +72,7 @@ def is_trusted_catalog_barcode_listing(
     ):
         return True
 
+    if listing.barcode_source in {"manual", "override"}:
+        return True
+
     return False

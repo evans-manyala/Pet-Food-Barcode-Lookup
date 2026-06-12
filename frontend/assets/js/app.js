@@ -233,7 +233,7 @@ function renderWarnings(data) {
     return;
   }
   el.hidden = false;
-  el.innerHTML = `<strong>Verification warnings</strong><ul>${data.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`;
+  el.innerHTML = `<strong>Good to know</strong><ul>${data.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`;
 }
 
 function renderResults(data) {

@@ -78,14 +78,24 @@ def identity_tokens(product_name: str | None, brand: str | None) -> list[str]:
     return tokens[:18]
 
 
+def is_hktv_multipack_url(url: str | None) -> bool:
+    """True when HKTV URL suffix denotes a multipack (-6, _12, etc.), not a single SKU."""
+    if not url:
+        return False
+    return bool(
+        re.search(r"/_S_(?:YX)?\d{12,14}[-_]\d+", url, flags=re.I)
+        or re.search(r"/p/[^/]+_S_(?:YX)?\d{12,14}[-_]\d+", url, flags=re.I)
+    )
+
+
 def extract_barcode_from_hktv_url(url: str | None) -> tuple[str | None, str]:
     """Return (barcode_digits, source_label) when EAN is embedded in an HKTV URL."""
-    if not url:
+    if not url or is_hktv_multipack_url(url):
         return None, ""
     patterns = (
         r"/_S_YX(\d{12,14})",
         r"/_S_(\d{12,14})(?:_H)?(?:/|$)",
-        r"/p/[^/]+_S_(\d{12,14})",
+        r"/p/[^/]+_S_(\d{12,14})(?:/|$)",
     )
     for pattern in patterns:
         match = re.search(pattern, url, flags=re.I)

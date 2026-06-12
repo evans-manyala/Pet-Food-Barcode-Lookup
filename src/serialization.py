@@ -8,6 +8,7 @@ import re
 from typing import Any, Optional
 
 from src.models import ProductInfo
+from src.user_warnings import warnings_for_ui
 
 
 def _number_from_text(value: Optional[str]) -> Optional[float]:
@@ -104,6 +105,6 @@ def product_to_api_payload(product: ProductInfo, source: str = "") -> dict[str, 
         "barcode_verified": product.barcode_verified,
         "identity_confidence": product.identity_confidence,
         "barcode_evidence": product.barcode_evidence,
-        "warnings": product.warnings,
+        "warnings": warnings_for_ui(product.warnings),
         "source": source,
     }

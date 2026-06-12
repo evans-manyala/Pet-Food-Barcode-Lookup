@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     hk_catalog_import_hktvmall_dir: str = "data/imports/hktvmall"
     hk_catalog_import_shopify_dir: str = "data/imports/shopify"
     hk_catalog_import_master_scrape_dir: str = "data/imports/master_scrape"
+    hk_catalog_overrides_path: str = "data/barcode_overrides.json"
 
     # ── Dashboard metrics (persisted across API restarts) ───────────────────
     metrics_enabled: bool = True

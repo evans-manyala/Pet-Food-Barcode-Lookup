@@ -19,6 +19,10 @@ from .normalize import (
     normalize_match_text,
     retailer_display_name,
 )
+from .identity import (
+    listing_matches_verified_product,
+    resolve_catalog_identity,
+)
 from .trust import catalog_price_freshness_note, is_trusted_catalog_barcode_listing
 
 log = logging.getLogger(__name__)
@@ -207,6 +211,7 @@ class HKCatalogStore:
         brand: str,
         product_name: str,
         barcode: str = "",
+        target_animal: str = "",
         limit: int = 15,
     ) -> list[CatalogListing]:
         """Fuzzy retailer discovery after identity is verified."""
@@ -217,36 +222,72 @@ class HKCatalogStore:
 
         if barcode:
             for listing in self.find_by_barcode(barcode, limit=limit):
-                by_url[listing.product_url] = listing
+                if listing_matches_verified_product(
+                    listing, brand, product_name, target_animal or None,
+                ):
+                    by_url[listing.product_url] = listing
 
+        rows_by_url: dict[str, sqlite3.Row] = {}
         brand_norm = normalize_match_text(brand)
-        rows: list[sqlite3.Row] = []
+        product_tokens = [
+            tok
+            for tok in identity_tokens(product_name, brand)
+            if tok not in set(brand_norm.split()) and len(tok) >= 4
+        ][:6]
+
         with self._connect() as conn:
             if brand_norm and len(brand_norm) >= 3:
                 pattern = f"%{brand_norm}%"
-                rows = conn.execute(
+                for row in conn.execute(
                     """
                     SELECT * FROM catalog_listings
                     WHERE brand LIKE ? OR title_norm LIKE ?
                     LIMIT 500
                     """,
                     (pattern, pattern),
-                ).fetchall()
-            else:
+                ):
+                    rows_by_url[row["product_url"]] = row
+
+            for token in product_tokens[:4]:
+                pattern = f"%{token}%"
+                for row in conn.execute(
+                    """
+                    SELECT * FROM catalog_listings
+                    WHERE title_norm LIKE ? OR product_url LIKE ?
+                    LIMIT 250
+                    """,
+                    (pattern, pattern),
+                ):
+                    rows_by_url[row["product_url"]] = row
+
+            if not rows_by_url:
                 tokens = identity_tokens(product_name, brand)
                 if tokens:
                     pattern = f"%{tokens[0]}%"
-                    rows = conn.execute(
+                    for row in conn.execute(
                         "SELECT * FROM catalog_listings WHERE title_norm LIKE ? LIMIT 500",
                         (pattern,),
-                    ).fetchall()
+                    ):
+                        rows_by_url[row["product_url"]] = row
 
-        candidates = [self._row_to_listing(row) for row in rows]
+        candidates = [self._row_to_listing(row) for row in rows_by_url.values()]
         ranked = rank_listings_for_product(candidates, brand, product_name, limit=limit)
         for listing in ranked:
-            by_url.setdefault(listing.product_url, listing)
+            if listing_matches_verified_product(
+                listing, brand, product_name, target_animal or None,
+            ):
+                by_url.setdefault(listing.product_url, listing)
 
         return list(by_url.values())[:limit]
+
+    def resolve_barcode_identity(self, barcode: str) -> "CatalogIdentityResult":
+        """Catalog-first identity with conflict detection."""
+        from .identity import CatalogIdentityResult
+
+        if not self._available:
+            return CatalogIdentityResult(status="insufficient", reason="catalog unavailable")
+        hits = self.find_by_barcode(barcode)
+        return resolve_catalog_identity(barcode, hits)
 
     def format_identity_evidence(
         self,
