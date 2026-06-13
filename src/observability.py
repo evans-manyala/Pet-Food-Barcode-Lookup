@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from src.pending_cache import flush_pending_cache_writes, pending_count
+
 log = logging.getLogger(__name__)
 
 _MAX_EVENTS = 5_000
@@ -373,6 +375,7 @@ class MetricsStore:
         from src.pinecone_store import PineconeStore
         from src.redis_cache import RedisCache
 
+        flush_pending_cache_writes()
         redis = RedisCache()
         pinecone = PineconeStore()
         catalog = get_catalog_store().get_stats()
@@ -386,6 +389,7 @@ class MetricsStore:
             "catalog_barcode_indexed": catalog.get("barcode_indexed", 0),
             "catalog_last_import_at": catalog.get("last_import_at"),
             "events_buffered": buffered,
+            "pending_cache_writes": pending_count(),
             "metrics_persisted": self._persistence_enabled,
             "metrics_store_path": str(self._store_path) if self._persistence_enabled else "",
         }

@@ -3405,7 +3405,20 @@ class ProductSearcher:
             # Primary path: live page opened and matched.
             if valid_page:
                 item["url"] = final_url
-                if not item.get("price_hkd") and page_price:
+                # Always trust the live HTML price over Gemini/SerpAPI notes when we
+                # successfully opened the product page (avoids HK$500-style LLM errors).
+                if page_price:
+                    llm_price = _format_hkd_price(item.get("price_hkd"))
+                    page_price_fmt = _format_hkd_price(page_price) or page_price
+                    if llm_price and llm_price != page_price_fmt:
+                        log.info(
+                            "  Live page price %s overrides LLM price %s for %s",
+                            page_price_fmt,
+                            llm_price,
+                            final_url,
+                        )
+                    item["price_hkd"] = page_price_fmt
+                elif not item.get("price_hkd"):
                     item["price_hkd"] = page_price
                 if item.get("in_stock") is None and page_stock is not None:
                     item["in_stock"] = page_stock

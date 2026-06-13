@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     metrics_store_path: str = "data/lookup_metrics.jsonl"
     metrics_retention_days: int = 30
 
+    # ── Pending Redis/Pinecone writes (retry after outage or .env misconfig) ─
+    pending_cache_enabled: bool = True
+    pending_cache_store_path: str = "data/pending_cache_writes.jsonl"
+    pending_cache_retention_days: int = 7
+
     # ── App ────────────────────────────────────────────────────────────────
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"
