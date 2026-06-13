@@ -310,6 +310,7 @@ Part 4 — Domain + CI/CD (this file)
 | `git pull` fails (`Permission denied (publickey)`) | VM → GitHub deploy key missing or not in `~/.ssh/config`. Complete **Step 13.5** (not Step 13 — that key is only for Actions → VM SSH). Test on VM: `ssh -T git@github.com` then `git pull origin main` |
 | Certbot fails | DNS must resolve to VM IP first (`dig +short api.mindmycat.com`) |
 | 502 Bad Gateway | `sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml ps` — app must be up on `127.0.0.1:8000` |
+| GitHub Actions deploy fails at health check (`502` / `Connection reset by peer`) | App still booting — deploy script used to wait only **3s**, then fall back to nginx `:80` (502 while app starts). Fixed in `remote-deploy.sh`: `compose up --wait` + retry `127.0.0.1:8000` up to ~60s. If still failing: `docker compose logs --tail=100 app` |
 | `bind: address already in use` on `127.0.0.1:8000` | Duplicate port mappings — use `docker-compose.prod.yml` (nginx) or `docker-compose.direct.yml` (public), not both. Run `compose down` then redeploy. |
 | App shows `8000/tcp` only (no `127.0.0.1:8000->8000`) | Port overlay missing — nginx deploy needs `-f docker-compose.yml -f docker-compose.prod.yml`. Do not rely on `ports: !reset` (unsupported on some Compose builds). |
 | Port 80 conflict | `sudo docker compose down` then re-run `setup-domain.sh` |
