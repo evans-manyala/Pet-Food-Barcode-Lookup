@@ -2487,6 +2487,40 @@ def _validate_product_page(
 
 
 
+_GUARANTEED_ANALYSIS_KEYS = (
+    "crude_protein_min",
+    "crude_fat_min",
+    "crude_fiber_max",
+    "moisture_max",
+    "ash_max",
+)
+
+
+def _nutrition_dict(nutrition: dict | NutritionalInfo | None) -> dict:
+    if nutrition is None:
+        return {}
+    if isinstance(nutrition, NutritionalInfo):
+        return nutrition.model_dump()
+    if isinstance(nutrition, dict):
+        return nutrition
+    return {}
+
+
+def _nutrition_has_guaranteed_analysis(nutrition: dict | NutritionalInfo | None) -> bool:
+    """
+    True when at least one core guaranteed-analysis field is present.
+
+    Calories and AAFCO/marketing text alone do not count — those must not skip
+    the dedicated global nutrition search.
+    """
+    data = _nutrition_dict(nutrition)
+    for key in _GUARANTEED_ANALYSIS_KEYS:
+        value = data.get(key)
+        if value is not None and str(value).strip() not in {"", "null", "none", "n/a", "—", "-"}:
+            return True
+    return False
+
+
 def _nutrition_has_values(nutrition: dict | None) -> bool:
     """
     Return True when at least one meaningful nutrition field exists.
@@ -2497,15 +2531,7 @@ def _nutrition_has_values(nutrition: dict | None) -> bool:
     if not isinstance(nutrition, dict):
         return False
 
-    keys = [
-        "crude_protein_min",
-        "crude_fat_min",
-        "crude_fiber_max",
-        "moisture_max",
-        "ash_max",
-        "calories",
-    ]
-    for key in keys:
+    for key in (*_GUARANTEED_ANALYSIS_KEYS, "calories"):
         value = nutrition.get(key)
         if value is not None and str(value).strip() not in {"", "null", "none", "n/a", "—", "-"}:
             return True
@@ -4156,7 +4182,7 @@ Rules:
             prod_data.get("nutritional_info") or {}
         )
 
-        if not _nutrition_has_values({**nutri_raw, "other": other}):
+        if not _nutrition_has_guaranteed_analysis({**nutri_raw, "other": other}):
             fallback_nutrition = self._fetch_global_nutrition(
                 barcode=barcode,
                 product_name=product_name,
@@ -4223,3 +4249,84 @@ Rules:
             warnings=warnings_for_ui(prod_data.get("warnings")),
             raw_llm_response=raw_facts[:12000],
         )
+
+    def _merge_nutritional_info(
+        self,
+        existing: NutritionalInfo | None,
+        nutri_raw: dict,
+        other: dict,
+    ) -> NutritionalInfo:
+        base_raw: dict = {}
+        base_other: dict = {}
+        if existing:
+            dumped = existing.model_dump()
+            base_other = dict(dumped.pop("other") or {})
+            base_raw = dumped
+        for key, value in nutri_raw.items():
+            if value and not base_raw.get(key):
+                base_raw[key] = value
+        for key, value in other.items():
+            if value and not base_other.get(key):
+                base_other[key] = value
+        try:
+            return NutritionalInfo(**base_raw, other=base_other)
+        except Exception as exc:
+            log.warning("Nutrition merge failed: %s", exc)
+            return existing or NutritionalInfo()
+
+    def enrich_cached_product(self, product: ProductInfo) -> tuple[ProductInfo, bool]:
+        """
+        Backfill missing guaranteed analysis and HK retailers on cache hits.
+
+        Avoids a full identity re-search when Redis/Pinecone holds a verified but
+        sparse record (e.g. calories + AAFCO only, no retailers).
+        """
+        changed = False
+        product_name = product.product_name
+        brand = product.brand or ""
+        barcode = product.barcode
+        target_animal = product.target_animal or ""
+        serpapi_budget = SerpApiBudget()
+
+        if not _nutrition_has_guaranteed_analysis(product.nutritional_info):
+            log.info("Cache enrich: fetching global nutrition for %s", barcode)
+            fallback_nutrition = self._fetch_global_nutrition(
+                barcode=barcode,
+                product_name=product_name,
+                brand=brand,
+            )
+            if fallback_nutrition:
+                nutri_raw, other = self._normalize_nutrition_raw(fallback_nutrition)
+                merged = self._merge_nutritional_info(product.nutritional_info, nutri_raw, other)
+                if merged != product.nutritional_info:
+                    product = product.model_copy(update={"nutritional_info": merged})
+                    changed = True
+
+        if not product.hk_retailers:
+            log.info("Cache enrich: fetching HK retailers for %s", barcode)
+            retailers = self._fetch_hk_retailers(
+                barcode=barcode,
+                product_name=product_name,
+                brand=brand,
+                target_animal=target_animal,
+                serpapi_budget=serpapi_budget,
+            )
+            override = get_barcode_override(barcode)
+            if override:
+                existing_urls = {r.url for r in retailers}
+                override_candidates = override_to_retailer_dicts(override)
+                if override_candidates:
+                    for listing in self._validate_retailers(
+                        override_candidates, barcode, product_name, brand, "",
+                    ):
+                        if listing.url not in existing_urls:
+                            retailers.append(listing)
+                            existing_urls.add(listing.url)
+                retailers.sort(
+                    key=lambda r: float(re.sub(r"[^\d.]", "", r.price_hkd or "9999") or 9999)
+                )
+            if retailers:
+                product = product.model_copy(update={"hk_retailers": retailers})
+                changed = True
+
+        return product, changed

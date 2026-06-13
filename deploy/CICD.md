@@ -313,7 +313,7 @@ Part 4 — Domain + CI/CD (this file)
 | `bind: address already in use` on `127.0.0.1:8000` | Duplicate port mappings — use `docker-compose.prod.yml` (nginx) or `docker-compose.direct.yml` (public), not both. Run `compose down` then redeploy. |
 | App shows `8000/tcp` only (no `127.0.0.1:8000->8000`) | Port overlay missing — nginx deploy needs `-f docker-compose.yml -f docker-compose.prod.yml`. Do not rely on `ports: !reset` (unsupported on some Compose builds). |
 | Port 80 conflict | `sudo docker compose down` then re-run `setup-domain.sh` |
-| Lookup timeout in browser | Normal — live search takes 30–90s; nginx timeout is 300s |
+| Lookup timeout in browser / **504** on force refresh | Live search takes 30–90s+. nginx default is **60s** if `proxy_read_timeout` is missing. On VM: `grep proxy_read_timeout /etc/nginx/sites-enabled/*` — must show `300s`. Re-run `setup-domain.sh` or patch nginx (see deploy/nginx/pet-food-lookup.conf.template). Bypass nginx test: `curl -m 180 http://127.0.0.1:8000/api/lookup?barcode=...&force_refresh=true` |
 | Cert renewal | certbot installs a cron job automatically; check `sudo certbot renew --dry-run` |
 
 ---

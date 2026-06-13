@@ -266,6 +266,12 @@ async function lookup(barcode, forceRefresh = false) {
 
   if (!res.ok) {
     const detail = body.detail || body.error || `Request failed (${res.status})`;
+    if (res.status === 504) {
+      throw new Error(
+        "Search timed out at the web server (504). The lookup may still be running in the background — "
+        + "wait 1–2 minutes, then try again without “Force fresh search”."
+      );
+    }
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
 
