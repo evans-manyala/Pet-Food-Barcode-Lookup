@@ -47,6 +47,27 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .table-card td,.recent-card td{padding:8px 0;border-top:1px solid var(--border);font-size:12px;vertical-align:middle}
 .table-card td:last-child{text-align:right;color:var(--muted)}
 .recent-card{margin-bottom:32px}
+.recent-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+.recent-card table.recent-table{min-width:1080px;table-layout:fixed}
+.recent-card table.recent-table th,
+.recent-card table.recent-table td{padding:10px 12px;border-top:1px solid var(--border);font-size:12px;vertical-align:top;line-height:1.4}
+.recent-card table.recent-table th{font-size:10px;white-space:nowrap;padding-bottom:12px}
+.recent-card table.recent-table .col-time{width:92px;white-space:nowrap}
+.recent-card table.recent-table .col-barcode{width:128px;white-space:nowrap}
+.recent-card table.recent-table .col-status{width:108px}
+.recent-card table.recent-table .col-confidence{width:88px}
+.recent-card table.recent-table .col-passes{width:56px;text-align:center}
+.recent-card table.recent-table .col-product{min-width:180px;word-break:break-word}
+.recent-card table.recent-table .col-source{width:140px}
+.recent-card table.recent-table .col-total{width:72px;white-space:nowrap}
+.recent-card table.recent-table .col-pipeline{width:120px}
+.time-date{display:block;font-size:11px;color:var(--muted);line-height:1.3}
+.time-clock{display:block;font-size:11px;font-family:ui-monospace,monospace;color:var(--text);line-height:1.3;margin-top:1px}
+.pipe-stack{display:flex;flex-direction:column;gap:3px}
+.pipe-item{display:inline-block;font-size:10px;font-family:ui-monospace,monospace;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;white-space:nowrap;width:fit-content}
+.source-tags{display:flex;flex-wrap:wrap;gap:4px}
+.source-tags .tag{margin-left:0}
+.product-cell{max-width:220px;word-break:break-word;hyphens:auto}
 .badge{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
 .badge.ok{background:rgba(34,197,94,.15);color:var(--green)}
 .badge.fail{background:rgba(239,68,68,.15);color:var(--red)}
@@ -219,22 +240,24 @@ tr.detail-row td{padding:0!important;border-top:none!important}
     <!-- Recent Activity — expandable rows -->
     <div class="recent-card" id="activity">
       <div class="section-title">Recent Activity <span style="font-weight:400;text-transform:none">(last 50 · click row to inspect)</span></div>
-      <table>
+      <div class="recent-table-wrap">
+      <table class="recent-table">
         <thead>
           <tr>
-            <th>Time (UTC)</th>
-            <th>Barcode</th>
-            <th>Status</th>
-            <th>Confidence</th>
-            <th>Passes</th>
-            <th>Product</th>
-            <th>Source</th>
-            <th>Total</th>
-            <th>Pipeline</th>
+            <th class="col-time">Time (UTC)</th>
+            <th class="col-barcode">Barcode</th>
+            <th class="col-status">Status</th>
+            <th class="col-confidence">Confidence</th>
+            <th class="col-passes">Passes</th>
+            <th class="col-product">Product</th>
+            <th class="col-source">Source</th>
+            <th class="col-total">Total</th>
+            <th class="col-pipeline">Pipeline</th>
           </tr>
         </thead>
         <tbody id="recent-tbody"></tbody>
       </table>
+      </div>
     </div>
 
     <!-- Barcode Inspector -->
@@ -419,6 +442,25 @@ function passBadge(p){
   return`<span class="pass-badge ${cls}" title="${p} pass${p>1?'es':''}">${p}</span>`;
 }
 
+function formatTimeCell(tsIso){
+  if(!tsIso)return'<span class="time-date">—</span>';
+  const parts=tsIso.replace('T',' ').substring(0,19).split(' ');
+  const date=parts[0]||'—';
+  const clock=parts[1]||'';
+  return`<span class="time-date">${esc(date)}</span><span class="time-clock">${esc(clock)}</span>`;
+}
+
+function pipelineStack(r){
+  const items=[
+    r.gemini_ms?{label:'G',value:ms(r.gemini_ms)}:null,
+    r.serpapi_ms?{label:'S',value:ms(r.serpapi_ms)}:null,
+    r.catalog_ms?{label:'C',value:ms(r.catalog_ms)}:null,
+    r.url_validation_ms?{label:'U',value:ms(r.url_validation_ms)}:null,
+  ].filter(Boolean);
+  if(!items.length)return'<span style="color:var(--muted);font-size:11px">—</span>';
+  return`<div class="pipe-stack">${items.map(i=>`<span class="pipe-item" title="${i.label==='G'?'Gemini / Vertex AI':i.label==='S'?'SerpAPI':i.label==='C'?'Local catalog':'URL validation'}">${i.label} ${i.value}</span>`).join('')}</div>`;
+}
+
 function renderRecent(rows){
   const tb=document.getElementById('recent-tbody');
   if(!rows.length){tb.innerHTML='<tr><td colspan="9" class="empty">No activity yet — run some lookups on the main app</td></tr>';return}
@@ -433,25 +475,19 @@ function renderRecent(rows){
       r.unverified?'<span class="tag" style="color:var(--yellow)">unverified</span>':'',
       r.catalog_trusted_retailers?`<span class="tag" style="color:var(--green)">cat×${r.catalog_trusted_retailers}</span>`:'',
       r.warning_count?`<span class="tag" style="color:var(--orange)">${r.warning_count}⚠</span>`:'',
-    ].join('');
-    const pipe=[
-      r.gemini_ms?`G ${ms(r.gemini_ms)}`:'',
-      r.serpapi_ms?`S ${ms(r.serpapi_ms)}`:'',
-      r.catalog_ms?`C ${ms(r.catalog_ms)}`:'',
-      r.url_validation_ms?`U ${ms(r.url_validation_ms)}`:'',
-    ].filter(Boolean).join(' · ')||'—';
+    ].filter(Boolean);
     const detailId=`detail-${i}`;
 
     html+=`<tr class="expandable" onclick="toggleDetail('${detailId}')">`;
-    html+=`<td style="color:var(--muted)">${r.ts_iso.replace('T',' ').substring(0,19)}</td>`;
-    html+=`<td class="mono">${r.barcode_display}</td>`;
-    html+=`<td>${badge}</td>`;
-    html+=`<td>${confBadge(r.identity_confidence)}</td>`;
-    html+=`<td style="text-align:center">${passBadge(r.passes_used)}</td>`;
-    html+=`<td>${esc(r.product_name||(r.success?'':'—'))}</td>`;
-    html+=`<td>${tags}</td>`;
-    html+=`<td style="color:var(--muted)">${ms(r.response_ms)}</td>`;
-    html+=`<td style="font-size:11px;color:var(--muted)">${pipe}</td>`;
+    html+=`<td class="col-time">${formatTimeCell(r.ts_iso)}</td>`;
+    html+=`<td class="col-barcode mono">${esc(r.barcode_display)}</td>`;
+    html+=`<td class="col-status">${badge}</td>`;
+    html+=`<td class="col-confidence">${confBadge(r.identity_confidence)}</td>`;
+    html+=`<td class="col-passes">${passBadge(r.passes_used)}</td>`;
+    html+=`<td class="col-product product-cell">${esc(r.product_name||(r.success?'':'—'))}</td>`;
+    html+=`<td class="col-source"><div class="source-tags">${tags.join('')||'<span style="color:var(--muted)">—</span>'}</div></td>`;
+    html+=`<td class="col-total" style="color:var(--muted)">${ms(r.response_ms)}</td>`;
+    html+=`<td class="col-pipeline">${pipelineStack(r)}</td>`;
     html+=`</tr>`;
 
     // Detail expansion row
