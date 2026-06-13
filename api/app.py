@@ -16,6 +16,13 @@ from pydantic import BaseModel, Field
 
 from src.barcode_validator import validate_barcode
 from src.config import get_settings
+from src.llm_searcher import (
+    _FACTS_PRIORITY_HEADER,
+    _PRODUCT_EXTRACT_PROMPT,
+    _PRODUCT_SEARCH_PROMPT,
+    _barcode_variants,
+    _quoted_variants,
+)
 from src.observability import LookupEvent, classify_error, metrics
 from src.pending_cache import flush_pending_cache_writes
 from src.serialization import product_to_api_payload
@@ -112,6 +119,8 @@ def _record_lookup(
         catalog_barcode_hits=int(catalog_stats.get("barcode_hits") or 0),
         catalog_retailer_candidates=int(catalog_stats.get("retailer_candidates") or 0),
         catalog_trusted_retailers=int(catalog_stats.get("trusted_retailers") or 0),
+        passes_used=int(timings.get("passes_used") or 0),
+        grounding_queries=list(timings.get("grounding_queries") or []),
     ))
 
 
@@ -247,6 +256,46 @@ def _do_lookup(raw_barcode: str, force_refresh: bool) -> dict:
     return {
         "success": True,
         "data": product_to_api_payload(product, source=lookup.source),
+    }
+
+
+@app.get("/api/debug/barcode/{barcode}", tags=["stats"])
+def debug_barcode(barcode: str, token: str | None = None) -> dict:
+    """
+    Return the exact Vertex AI prompts and any recorded grounding queries for a barcode.
+    Useful for diagnosing why a barcode search failed or took multiple passes.
+    """
+    _check_stats_token(token)
+
+    variants = _barcode_variants(barcode)
+    quoted = _quoted_variants(barcode)
+
+    search_prompt = _PRODUCT_SEARCH_PROMPT.format(
+        barcode=barcode,
+        barcode_variants=quoted,
+    )
+    extract_prompt_template = _PRODUCT_EXTRACT_PROMPT.format(
+        barcode=barcode,
+        barcode_variants=quoted,
+        facts="<research_notes_injected_here>",
+    )
+
+    # Pull the most recent lookup event for this barcode from the metrics store.
+    recent_events = metrics.get_stats(hours=168)["recent"]
+    last_event = next(
+        (e for e in recent_events if e.get("barcode_display") == barcode),
+        None,
+    )
+
+    return {
+        "barcode": barcode,
+        "variants": variants,
+        "prompts": {
+            "pass_1_search_prompt": search_prompt,
+            "extract_prompt_template": extract_prompt_template,
+            "multi_pass_facts_header": _FACTS_PRIORITY_HEADER,
+        },
+        "last_lookup": last_event,
     }
 
 
