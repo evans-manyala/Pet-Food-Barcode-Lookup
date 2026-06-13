@@ -1,11 +1,14 @@
 # Reverse proxy for Pet Food Barcode Lookup
 # Copy to /etc/nginx/sites-available/pet-food-lookup and symlink to sites-enabled.
 # Replace DOMAIN with your hostname (e.g. api.mydomain.com).
+#
+# default_server + server_name _ ensures http://VM_IP/ uses these timeouts too
+# (not nginx's 60s default when Host is an IP address).
 
 server {
-    listen 80;
-    listen [::]:80;
-    server_name DOMAIN;
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name DOMAIN _;
 
     client_max_body_size 10m;
 
@@ -19,5 +22,6 @@ server {
         proxy_connect_timeout 60s;
         proxy_send_timeout 300s;
         proxy_read_timeout 300s;
+        send_timeout 300s;
     }
 }

@@ -252,6 +252,16 @@ Or from GitHub: **Actions** → **Deploy to GCP VM** → **Run workflow**.
 | `https://api.mindmycat.com/` | Main UI |
 | `https://api.mindmycat.com/?barcode=9003579008331` | Pre-filled demo |
 | `https://api.mindmycat.com/api/health` | API health check |
+| `http://34.133.118.0/api/lookup?barcode=9003579008331` | API demo (IP, until HTTPS is live) |
+
+**API reference:** [docs/API.md](../docs/API.md)
+
+**Postman (share these files):**
+
+1. [postman/Pet-Food-Barcode-Lookup.postman_collection.json](../postman/Pet-Food-Barcode-Lookup.postman_collection.json)
+2. [postman/environments/Production.postman_environment.json](../postman/environments/Production.postman_environment.json) — update `base_url` when HTTPS is live
+
+Import instructions: [postman/README.md](../postman/README.md)
 
 ---
 
@@ -303,7 +313,7 @@ Part 4 — Domain + CI/CD (this file)
 | `bind: address already in use` on `127.0.0.1:8000` | Duplicate port mappings — use `docker-compose.prod.yml` (nginx) or `docker-compose.direct.yml` (public), not both. Run `compose down` then redeploy. |
 | App shows `8000/tcp` only (no `127.0.0.1:8000->8000`) | Port overlay missing — nginx deploy needs `-f docker-compose.yml -f docker-compose.prod.yml`. Do not rely on `ports: !reset` (unsupported on some Compose builds). |
 | Port 80 conflict | `sudo docker compose down` then re-run `setup-domain.sh` |
-| Lookup timeout in browser | Normal — live search takes 30–90s; nginx timeout is 300s |
+| Lookup timeout in browser / **504** on force refresh | Live search takes 30–90s+. nginx default is **60s** if `proxy_read_timeout` is missing. On VM: `grep proxy_read_timeout /etc/nginx/sites-enabled/*` — must show `300s`. Re-run `setup-domain.sh` or patch nginx (see deploy/nginx/pet-food-lookup.conf.template). Bypass nginx test: `curl -m 180 http://127.0.0.1:8000/api/lookup?barcode=...&force_refresh=true` |
 | Cert renewal | certbot installs a cron job automatically; check `sudo certbot renew --dry-run` |
 
 ---

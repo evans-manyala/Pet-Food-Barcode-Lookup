@@ -23,8 +23,19 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 app = FastAPI(
     title="Pet Food Barcode Lookup",
-    description="Look up pet food products by barcode with HK retailer pricing.",
+    description=(
+        "Look up pet food products by barcode with Hong Kong retailer pricing, "
+        "nutrition, and verified identity.\n\n"
+        "**Lookup pipeline:** Redis cache → Pinecone → Gemini live search.\n\n"
+        "Full docs: [docs/API.md](https://github.com/evans-manyala/Pet-Food-Barcode-Lookup/blob/main/docs/API.md)"
+    ),
     version="1.0.0",
+    openapi_tags=[
+        {"name": "health", "description": "Liveness and readiness"},
+        {"name": "lookup", "description": "Barcode product lookup"},
+        {"name": "stats", "description": "Observability metrics for /dashboard"},
+        {"name": "ui", "description": "Web frontend (HTML)"},
+    ],
 )
 
 app.add_middleware(
@@ -93,12 +104,12 @@ def _record_lookup(
     ))
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["health"])
 def health() -> dict:
     return {"status": "ok", "service": "pet-food-barcode-lookup"}
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", tags=["stats"])
 def stats(
     hours: float = Query(24, ge=1, le=168),
     token: str | None = Query(None),
@@ -107,7 +118,7 @@ def stats(
     return metrics.get_stats(hours=hours)
 
 
-@app.get("/api/lookup")
+@app.get("/api/lookup", tags=["lookup"])
 def lookup_get(
     barcode: str = Query(..., min_length=1),
     force_refresh: bool = Query(False),
@@ -115,7 +126,7 @@ def lookup_get(
     return _do_lookup(barcode, force_refresh)
 
 
-@app.post("/api/lookup")
+@app.post("/api/lookup", tags=["lookup"])
 def lookup_post(body: LookupRequest) -> dict:
     return _do_lookup(body.barcode, body.force_refresh)
 
@@ -228,7 +239,7 @@ def _do_lookup(raw_barcode: str, force_refresh: bool) -> dict:
     }
 
 
-@app.get("/")
+@app.get("/", tags=["ui"])
 def index() -> FileResponse:
     index_path = FRONTEND_DIR / "index.html"
     if not index_path.exists():
@@ -236,7 +247,7 @@ def index() -> FileResponse:
     return FileResponse(index_path)
 
 
-@app.get("/dashboard")
+@app.get("/dashboard", tags=["ui"])
 def dashboard() -> FileResponse:
     dash_path = FRONTEND_DIR / "dashboard.html"
     if not dash_path.exists():

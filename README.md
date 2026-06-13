@@ -1,258 +1,219 @@
-# 🐾 Pet Food Barcode Lookup
+# Pet Food Barcode Lookup
 
-A production-ready Python CLI tool that accepts a pet food barcode, validates it,
-searches the web for product details and **Hong Kong retailer pricing**, then
-caches results in **Redis** and stores them permanently in **Pinecone**.
+Look up Hong Kong pet food products by barcode: nutrition, verified identity, and **HK$ pricing** from local retailers. Results are cached in **Redis**, stored in **Pinecone**, and enriched from a **local HK retailer catalog** and curated **barcode overrides**.
+
+**Production:** `http://34.133.118.0` · **Domain (HTTPS pending):** `https://api.mindmycat.com`
+
+---
+
+## Features
+
+- **Barcode validation** — EAN-13, UPC-A, EAN-8 with GS-1 check digit
+- **Three-layer cache** — Redis (24 h) → Pinecone (permanent) → Gemini live search
+- **HK catalog** — SQLite DB from scraped retailer CSVs (HKTVmall, Shopify stores, master scrape)
+- **Barcode overrides** — Curated fixes in `data/barcode_overrides.json` for collision / wrong-product cases
+- **REST API** — `GET`/`POST` `/api/lookup` with JSON responses
+- **Web UI** — Browser lookup at `/` and ops dashboard at `/dashboard`
+- **CI/CD** — GitHub Actions deploy to GCP VM (see [deploy/CICD.md](deploy/CICD.md))
 
 ---
 
 ## Architecture
 
 ```
-User Input (barcode)
-       │
+Barcode input
+     │
+     ▼
+┌─────────────┐
+│  Validator  │  GS-1 check digit
+└──────┬──────┘
        ▼
-┌─────────────────┐
-│ Barcode Validator│  EAN-13 / UPC-A / EAN-8 + GS-1 check digit
-└────────┬────────┘
-         │ valid
-         ▼
-┌─────────────────┐   HIT ──────────────────────────────────────►  Display
-│   Redis Cache   │
-└────────┬────────┘
-         │ MISS
-         ▼
-┌─────────────────┐   HIT ──────────────────────────────────────►  Display
-│ Pinecone Vector │                                                + re-cache
-│   Database      │                                                  in Redis
-└────────┬────────┘
-         │ MISS
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Perplexity AI  (sonar-pro model)                │
-│                                                              │
-│  Phase 1 – Product details from manufacturer website         │
-│    · Product name, brand, target animal (dog/cat)            │
-│    · Product image URL                                       │
-│    · Guaranteed / nutritional analysis                       │
-│                                                              │
-│  Phase 2 – HK retailer search (2–5 stores, prices in HKD)   │
-│    · Retailer name + direct product URL                      │
-│    · Price in Hong Kong Dollars (HK$)                        │
-│    · In-stock status                                         │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                   ┌───────────┴───────────┐
-                   ▼                       ▼
-            Save to Redis           Upsert to Pinecone
-            (TTL: 24 h)          (permanent, vector search)
+┌─────────────┐  HIT ──► return (source: redis)
+│    Redis    │
+└──────┬──────┘
+       │ MISS
+       ▼
+┌─────────────┐  HIT ──► return (source: pinecone) + re-cache Redis
+│  Pinecone   │
+└──────┬──────┘
+       │ MISS
+       ▼
+┌─────────────────────────────────────────────┐
+│  Live search (Gemini + SerpAPI)              │
+│  · Local HK catalog + barcode overrides      │
+│  · Product identity, image, nutrition        │
+│  · HK retailer URLs and HK$ prices           │
+└──────────────────┬──────────────────────────┘
+                   ▼
+         Save Redis + upsert Pinecone
+         (source: live_search)
 ```
 
 ---
 
-## Prerequisites
+## Quick start (local)
 
-| Dependency | Purpose | Sign-up |
-|---|---|---|
-| **Perplexity AI** (`sonar-pro`) | Live web search + LLM | [perplexity.ai](https://www.perplexity.ai/) |
-| **OpenAI** (`text-embedding-3-small`) | Embeddings for Pinecone | [platform.openai.com](https://platform.openai.com/) |
-| **Redis** ≥ 6 | Fast TTL cache | Local or [Redis Cloud](https://redis.com/try-free/) |
-| **Pinecone** | Permanent vector storage | [pinecone.io](https://www.pinecone.io/) |
-| Python ≥ 3.11 | Runtime | — |
-
----
-
-## Installation
+### Docker (recommended)
 
 ```bash
-# 1. Clone / download the project
-cd pet_barcode_lookup
+git clone git@github.com:evans-manyala/Pet-Food-Barcode-Lookup.git
+cd Pet-Food-Barcode-Lookup
 
-# 2. Create a virtual environment
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
+cp deploy/env.production.example .env
+# Edit .env — at minimum: GOOGLE_CLOUD_PROJECT, OPENROUTER_API_KEY, SERPAPI_API_KEY, PINECONE_API_KEY
 
-# 3. Install dependencies
+docker compose -f docker-compose.yml -f docker-compose.direct.yml up -d --build
+```
+
+Open **http://localhost:80/** (or set `APP_PORT=8000` in `.env` and use port 8000).
+
+### Native Python
+
+```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Configure environment variables
-cp .env.example .env
-# Edit .env and fill in your API keys (see Configuration section)
+cp deploy/env.production.example .env
+# Start Redis: docker run -d -p 6379:6379 redis:7-alpine
+uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## Configuration (`.env`)
+## API
 
-```dotenv
-# Perplexity AI – live web search LLM
-PERPLEXITY_API_KEY=pplx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Liveness check |
+| `GET` | `/api/lookup?barcode=&force_refresh=` | Look up by barcode |
+| `POST` | `/api/lookup` | JSON body: `{ "barcode", "force_refresh" }` |
+| `GET` | `/api/stats?hours=&token=` | Dashboard metrics |
+| `GET` | `/docs` | Swagger UI (OpenAPI) |
+| `GET` | `/` | Web lookup UI |
+| `GET` | `/dashboard` | Ops dashboard |
 
-# OpenAI – embeddings for Pinecone
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+**Full reference:** [docs/API.md](docs/API.md)
 
-# Redis
-REDIS_URL=redis://localhost:6379/0
-REDIS_TTL=86400                  # 24 hours (seconds)
+**Postman:** Import [postman/Pet-Food-Barcode-Lookup.postman_collection.json](postman/Pet-Food-Barcode-Lookup.postman_collection.json) and an environment from [postman/environments/](postman/environments/). See [postman/README.md](postman/README.md).
 
-# Pinecone
-PINECONE_API_KEY=pcsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-PINECONE_INDEX_NAME=pet-food-products
-PINECONE_DIMENSION=1536
-```
-
-> **Redis quick-start (local):**
-> ```bash
-> docker run -d -p 6379:6379 redis:7-alpine
-> ```
-
----
-
-## Usage
-
-### Interactive mode (recommended)
+### Example
 
 ```bash
-python main.py
+curl -s "http://localhost:8000/api/health"
+curl -s "http://localhost:8000/api/lookup?barcode=9003579008331"
 ```
 
+Successful lookup response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "barcode": "9003579008331",
+    "product_name": "Royal Canin Medium Puppy Dry Dog Food (Medium Junior)",
+    "brand": "Royal Canin",
+    "source": "redis",
+    "price_comparison": [{ "store": "PetShack", "price_display": "HK$272.00", "url": "..." }],
+    "identity_confidence": "high"
+  }
+}
 ```
-╭──────────────────────────────────────╮
-│  🐾  Pet Food Barcode Lookup          │
-│  Powered by Perplexity AI · Redis · Pinecone │
-╰──────────────────────────────────────╯
 
-Type a barcode and press Enter. Type quit or press Ctrl-C to exit.
+---
 
-Barcode ▶ 0023100031105
-```
-
-### Single-barcode mode
+## CLI
 
 ```bash
-python main.py --barcode 0023100031105
+python main.py                              # interactive
+python main.py --barcode 9003579008331
+python main.py --barcode 9003579008331 --force-refresh
 ```
 
-### Force a fresh web search (bypass cache)
+---
+
+## Configuration
+
+Copy `deploy/env.production.example` to `.env`. Key variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_CLOUD_PROJECT` | Vertex AI / Gemini |
+| `OPENROUTER_API_KEY` | Embeddings for Pinecone |
+| `SERPAPI_API_KEY` | Identity, images, HK retailer search |
+| `PINECONE_API_KEY` | Vector storage |
+| `REDIS_URL` | Cache (`redis://redis:6379/0` in Docker) |
+| `HK_CATALOG_DB_PATH` | Local SQLite catalog |
+| `HK_CATALOG_OVERRIDES_PATH` | Curated barcode fixes |
+| `STATS_TOKEN` | Optional — protect `/api/stats` |
+
+Import HK catalog (optional, from scraped CSVs):
 
 ```bash
-python main.py --barcode 0023100031105 --force-refresh
+python scripts/import_hk_catalog.py
 ```
 
 ---
 
-## Supported Barcode Formats
+## Deployment
 
-| Format | Length | Example |
-|---|---|---|
-| **EAN-13** | 13 digits | `0023100031105` |
-| **UPC-A** | 12 digits | `023100031105` |
-| **EAN-8** | 8 digits | `01234565` |
+| Guide | Use case |
+|-------|----------|
+| [deploy/DEPLOY.md](deploy/DEPLOY.md) | First-time GCP VM setup |
+| [deploy/CICD.md](deploy/CICD.md) | Domain + GitHub Actions CI/CD |
 
-Validation uses the **GS-1 check digit algorithm** – a mis-keyed barcode is
-rejected immediately before any network calls are made.
+Production deploys run automatically on push to `main`.
 
 ---
 
-## Hong Kong Retailers Searched
-
-Perplexity searches across (but is not limited to):
-
-- petstation.com.hk
-- petsworld.com.hk
-- pawsmore.com.hk
-- petboo.com.hk
-- hktvmall.com / hktv.com.hk
-- ipetdog.com
-- mrpetshk.com
-- petfashion.com.hk
-- petscorner.com.hk
-- petshop168.com
-- pet-city.com.hk
-- goopets.com
-- petoo.com.hk
-
-All prices are returned in **Hong Kong Dollars (HK$)**. A minimum of 2 and a
-maximum of 5 retailers are shown.
-
----
-
-## Sample Output
+## Project structure
 
 ```
-────────────────────────── Result (source: 🌐 Live web search) ──────────────
-
-╭──────────────────── 🏷  Product Information ───────────────────╮
-│  Barcode          0023100031105                                 │
-│  Product Name     Hill's Science Diet Adult Large Breed        │
-│  Brand            Hill's Pet Nutrition                         │
-│  Target Animal    Dog                                          │
-│  Manufacturer URL https://www.hillspet.com/…                  │
-│  Image URL        https://www.hillspet.com/…/product.jpg      │
-╰────────────────────────────────────────────────────────────────╯
-
-╭─────────── 🧪  Nutritional / Guaranteed Analysis ─────────────╮
-│  Crude Protein (min)   23.5%                                   │
-│  Crude Fat (min)       12.5%                                   │
-│  Crude Fiber (max)      4.0%                                   │
-│  Moisture (max)        10.0%                                   │
-│  Calories              339 kcal/cup                            │
-╰────────────────────────────────────────────────────────────────╯
-
-╭──────────────────── 🛒  Hong Kong Online Retailers ────────────╮
-│  #  Retailer            Price (HKD)  Stock  URL                │
-│  1  PetStation          HK$349.00      ✔    https://…         │
-│  2  HKTVmall            HK$329.00      ✔    https://…         │
-│  3  PetBoo              HK$355.00      ?    https://…         │
-╰────────────────────────────────────────────────────────────────╯
+Pet-Food-Barcode-Lookup/
+├── api/app.py              # FastAPI service
+├── main.py                 # CLI
+├── frontend/               # Web UI + dashboard
+├── postman/                # Postman collection + environments
+├── docs/API.md             # API reference
+├── data/
+│   ├── barcode_overrides.json
+│   └── hk_retailer_catalog.db   # gitignored — import locally
+├── scripts/import_hk_catalog.py
+├── src/
+│   ├── service.py          # Redis → Pinecone → live search
+│   ├── llm_searcher.py     # Gemini + SerpAPI
+│   ├── catalog/            # HK retailer catalog + overrides
+│   ├── redis_cache.py
+│   ├── pinecone_store.py
+│   └── observability.py    # /api/stats metrics
+├── docker-compose.yml
+├── docker-compose.direct.yml   # public port (demo)
+├── docker-compose.prod.yml     # nginx: localhost:8000 only
+└── deploy/
 ```
 
 ---
 
-## Project Structure
+## Demo barcodes
 
-```
-pet_barcode_lookup/
-├── main.py                  # CLI entry point
-├── requirements.txt
-├── .env.example
-└── src/
-    ├── __init__.py
-    ├── config.py            # Pydantic-settings configuration
-    ├── models.py            # ProductInfo, NutritionalInfo, RetailerListing
-    ├── barcode_validator.py # EAN-13/UPC-A/EAN-8 validation + GS-1 checksum
-    ├── llm_searcher.py      # Perplexity API – two-phase web search
-    ├── redis_cache.py       # Redis GET/SET with TTL
-    └── pinecone_store.py    # Pinecone upsert + exact-ID + semantic search
-```
-
----
-
-## Cache & Storage Strategy
-
-| Layer | Tool | Key | TTL | Purpose |
-|---|---|---|---|---|
-| L1 | Redis | `pet_food:<barcode>` | 24 h | Sub-millisecond retrieval |
-| L2 | Pinecone | Vector ID = barcode | ∞ | Permanent store, survives Redis expiry |
-| L3 | Perplexity | — | — | Live fallback when both caches miss |
-
-On a **Pinecone hit**, the result is automatically re-cached in Redis so
-subsequent lookups are fast again.
+| Barcode | Product |
+|---------|---------|
+| `9003579008331` | Royal Canin Medium Puppy dry |
+| `4894514083033` | VitaPet Supreme tuna & whitebait |
+| `45070778` | Purina Mon Petit |
+| `0023100031105` | Hill's Science Diet (generic demo) |
 
 ---
 
 ## Troubleshooting
 
 | Problem | Solution |
-|---|---|
-| `PERPLEXITY_API_KEY not set` | Add key to `.env` |
-| `Redis unavailable` | Start Redis: `docker run -d -p 6379:6379 redis:7-alpine` |
-| `Pinecone initialisation failed` | Check `PINECONE_API_KEY` and network |
-| Barcode rejected | Verify digit count (8/12/13) and check digit |
-| `No HK retailers found` | Product may not be sold in HK; try `--force-refresh` |
+|---------|----------|
+| `503` Google credentials | Run `gcloud auth application-default login` locally; on GCP VM use service account |
+| Redis unavailable | `docker compose ps` — wait for redis healthy |
+| Slow lookup | Live search takes 30–90 s; use cache or avoid `force_refresh` |
+| Invalid barcode | Check digit / length (8, 12, or 13 digits) |
 
 ---
 
 ## License
 
-MIT – feel free to adapt for your own use.
+MIT

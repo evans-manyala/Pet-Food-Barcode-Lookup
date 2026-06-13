@@ -210,6 +210,8 @@ sudo docker compose logs -f app   # Ctrl+C to exit
 
 ✅ **Done for Path A.** Share the IP URL with testers.
 
+**API docs for testers:** [docs/API.md](../docs/API.md) · **Postman:** import [postman/Pet-Food-Barcode-Lookup.postman_collection.json](../postman/Pet-Food-Barcode-Lookup.postman_collection.json) and [postman/environments/Production.postman_environment.json](../postman/environments/Production.postman_environment.json) (set `base_url` to `http://<VM_IP>`).
+
 ---
 
 ### Path B — Domain + HTTPS (continue to CICD.md)

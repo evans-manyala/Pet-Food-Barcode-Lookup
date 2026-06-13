@@ -1,0 +1,299 @@
+{
+  "info": {
+    "_postman_id": "pet-food-barcode-lookup-api",
+    "name": "Pet Food Barcode Lookup",
+    "description": "Hong Kong pet food barcode lookup API.\n\nImport environments from `postman/environments/` or set the `base_url` collection variable.\n\nDocs: docs/API.md | OpenAPI: {{base_url}}/docs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "stats_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "demo_barcode",
+      "value": "9003579008331",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health"]
+            },
+            "description": "Liveness probe. Returns `{\"status\":\"ok\",\"service\":\"pet-food-barcode-lookup\"}`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Lookup",
+      "item": [
+        {
+          "name": "GET lookup (cached)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode={{demo_barcode}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "{{demo_barcode}}",
+                  "description": "EAN-13, UPC-A, or EAN-8"
+                },
+                {
+                  "key": "force_refresh",
+                  "value": "false",
+                  "description": "Bypass Redis/Pinecone",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Look up a barcode. Uses Redis → Pinecone → live search pipeline unless `force_refresh=true`."
+          },
+          "response": []
+        },
+        {
+          "name": "GET lookup (force refresh)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode={{demo_barcode}}&force_refresh=true",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "{{demo_barcode}}"
+                },
+                {
+                  "key": "force_refresh",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Bypass cache layers and run a fresh live search (30–90 s). Uses catalog + barcode overrides."
+          },
+          "response": []
+        },
+        {
+          "name": "POST lookup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"barcode\": \"{{demo_barcode}}\",\n  \"force_refresh\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/lookup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"]
+            },
+            "description": "JSON body equivalent of GET /api/lookup."
+          },
+          "response": []
+        },
+        {
+          "name": "POST lookup (force refresh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"barcode\": \"{{demo_barcode}}\",\n  \"force_refresh\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/lookup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"]
+            },
+            "description": "Fresh live search via POST."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Stats",
+      "item": [
+        {
+          "name": "GET stats (24h)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/stats?hours=24",
+              "host": ["{{base_url}}"],
+              "path": ["api", "stats"],
+              "query": [
+                {
+                  "key": "hours",
+                  "value": "24",
+                  "description": "1–168"
+                }
+              ]
+            },
+            "description": "Dashboard metrics. Set `stats_token` variable and add `?token=` if STATS_TOKEN is configured on the server."
+          },
+          "response": []
+        },
+        {
+          "name": "GET stats (with token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/stats?hours=24&token={{stats_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "stats"],
+              "query": [
+                {
+                  "key": "hours",
+                  "value": "24"
+                },
+                {
+                  "key": "token",
+                  "value": "{{stats_token}}"
+                }
+              ]
+            },
+            "description": "Use when STATS_TOKEN is set in production .env."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Demo barcodes",
+      "description": "Example lookups for sharing with testers.",
+      "item": [
+        {
+          "name": "Royal Canin Medium Puppy dry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode=9003579008331",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "9003579008331"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "長生の秘訣 cat mousse",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode=4580865350053",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "4580865350053"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "VitaPet Supreme tuna",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode=4894514083033",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "4894514083033"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Purina Mon Petit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode=45070778",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "45070778"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Hill's Science Diet demo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/lookup?barcode=0023100031105",
+              "host": ["{{base_url}}"],
+              "path": ["api", "lookup"],
+              "query": [
+                {
+                  "key": "barcode",
+                  "value": "0023100031105"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
