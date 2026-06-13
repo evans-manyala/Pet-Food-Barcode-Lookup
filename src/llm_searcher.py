@@ -56,6 +56,8 @@ from .catalog import get_catalog_store
 from .catalog.identity import (
     catalog_conflicts_with_verified_identity,
     listing_matches_product_variant,
+    product_line_codes_compatible,
+    extract_product_line_codes,
     trusted_barcode_hits,
 )
 from .catalog.overrides import (
@@ -316,7 +318,39 @@ def _repair_and_parse(text: str) -> dict:
 
 
 def _extract_json(text: str) -> dict:
-    return _repair_and_parse(text)
+    data = _repair_and_parse(text)
+    # A missing required key means the model output was truncated mid-JSON.
+    # Raise here so the caller's existing safe-fallback path handles it cleanly
+    # instead of silently caching an incomplete product record.
+    if "barcode_verified" not in data:
+        raise ValueError(
+            "Parsed JSON is missing required key 'barcode_verified'; "
+            "model output was likely truncated."
+        )
+    return data
+
+
+def _normalise_extracted_product(data: dict) -> dict:
+    """
+    Enforce business invariants on the LLM-extracted product dict.
+
+    These rules mirror the prompt instructions but are guaranteed in Python
+    regardless of model version, prompt drift, or partial compliance:
+      - barcode_verified=False  → product_name/brand must be null, confidence=low
+      - barcode_verified=True   → confidence cannot remain 'low'
+      - confidence='high'       → barcode_evidence must be non-empty (else downgrade)
+    """
+    verified = bool(data.get("barcode_verified"))
+    if not verified:
+        data["product_name"] = None
+        data["brand"] = None
+        data["identity_confidence"] = "low"
+    else:
+        if data.get("identity_confidence") == "low":
+            data["identity_confidence"] = "medium"
+        if data.get("identity_confidence") == "high" and not data.get("barcode_evidence"):
+            data["identity_confidence"] = "medium"
+    return data
 
 
 # ─── Response collectors ──────────────────────────────────────────────────────
@@ -520,6 +554,13 @@ def _identity_tokens(product_name: str | None, brand: str | None) -> list[str]:
     for tok in re.findall(r"[\u4e00-\u9fff]{2,}", text):
         if tok not in tokens:
             tokens.append(tok)
+
+    # Product line numbers (e.g. Royal Canin "Indoor 27") — too short for the
+    # generic [a-z0-9]{3,} rule but critical for variant matching.
+    name_text = _normalise_match_text(product_name or "")
+    for num in re.findall(r"\b(\d{1,2})\+?\b", name_text):
+        if num not in tokens:
+            tokens.append(num)
 
     return tokens[:18]
 
@@ -1869,12 +1910,78 @@ def _filter_hkd_price_outliers(candidates: list[float]) -> list[float]:
     return filtered
 
 
-def _extract_hkd_price(text: str) -> str | None:
+def _extract_shopify_variant_price(html: str, url: str) -> str | None:
+    """
+    Prefer Shopify variant price embedded in page JSON when the URL carries
+    ?variant= — avoids picking promo thresholds or related-product prices.
+    """
+    variant_match = re.search(r"[?&]variant=(\d+)", url or "")
+    if not variant_match:
+        return None
+    variant_id = variant_match.group(1)
+
+    for pattern in (
+        rf'"id"\s*:\s*{variant_id}[^}}]{{0,500}}?"price"\s*:\s*(\d+)',
+        rf'"variant[_ ]?id"\s*:\s*"?{variant_id}"?[^}}]{{0,500}}?"price"\s*:\s*(\d+)',
+        rf'variantId["\']?\s*:\s*["\']?{variant_id}["\']?[^}}]{{0,300}}price["\']?\s*:\s*(\d+)',
+    ):
+        match = re.search(pattern, html or "", flags=re.I | re.S)
+        if not match:
+            continue
+        cents = int(match.group(1))
+        if cents <= 0:
+            continue
+        dollars = cents / 100.0 if cents >= 100 else float(cents)
+        if 1 <= dollars <= 10000:
+            return f"HK${dollars:.2f}"
+
+    for block in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html or "",
+        flags=re.I | re.S,
+    ):
+        try:
+            payload = json.loads(block.group(1))
+        except Exception:
+            continue
+        items = payload if isinstance(payload, list) else [payload]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            offers = item.get("offers")
+            if isinstance(offers, dict):
+                offers = [offers]
+            if not isinstance(offers, list):
+                continue
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+                sku = str(offer.get("sku") or offer.get("url") or "")
+                if variant_id not in sku and variant_id not in str(offer.get("url") or ""):
+                    continue
+                price = offer.get("price")
+                if price is None:
+                    continue
+                try:
+                    val = float(str(price).replace(",", ""))
+                except ValueError:
+                    continue
+                if 1 <= val <= 10000:
+                    return f"HK${val:.2f}"
+    return None
+
+
+def _extract_hkd_price(text: str, page_url: str = "") -> str | None:
     """
     Extract a plausible HKD price from retailer HTML/text. When both original
     and special prices appear, prefer the lowest plausible positive price
     after filtering add-on / promo outliers.
     """
+    if page_url:
+        shopify_price = _extract_shopify_variant_price(text, page_url)
+        if shopify_price:
+            return shopify_price
+
     plain = _strip_html(text)
     candidates: list[float] = []
 
@@ -2428,6 +2535,9 @@ def _product_text_matches(
     if digits and digits in re.sub(r"\D", "", plain):
         return True
 
+    if not listing_matches_product_variant(plain, product_name, brand):
+        return False
+
     tokens = _identity_tokens(product_name, brand)
     if not tokens:
         return False
@@ -2465,7 +2575,7 @@ def _validate_product_page(
         if not _product_text_matches(final_url, html, barcode, product_name, brand):
             continue
 
-        price = _extract_hkd_price(html)
+        price = _extract_hkd_price(html, final_url)
         plain = _strip_html(html).lower()
         in_stock: bool | None = None
         if any(x in plain for x in ["out of stock", "currently out of stock", "缺貨", "售罄"]):
@@ -2628,6 +2738,17 @@ JSON structure:
   }}
 }}
 """
+
+# Injected into multi-pass facts to guide evidence weighting.
+# Only added when rescue / SerpAPI sections are present (pass 2+).
+_FACTS_PRIORITY_HEADER = (
+    "NOTE: The research notes below span multiple search passes. "
+    "Evidence is ordered weakest-first (Vertex pass 1 at the top) to "
+    "strongest-last (SerpAPI sections at the bottom). "
+    "When sections conflict, prefer explicit barcode-to-product connections "
+    "found in the RESCUE SEARCH, SERPAPI GOOGLE AI MODE, or "
+    "SERPAPI GOOGLE BARCODE SEARCH sections over the initial pass.\n\n"
+)
 
 _RETAILER_SEARCH_PROMPT = """\
 Search Hong Kong online pet-food retailers for this EXACT VERIFIED product.
@@ -2956,6 +3077,50 @@ Return ONLY JSON:
 """
 
 
+# ─── Structured extraction schema ────────────────────────────────────────────
+# Enforced at token-generation time by Gemini (response_schema in config).
+# Guarantees output shape regardless of model version or prompt drift.
+
+_EXTRACT_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    required=[
+        "barcode_verified", "identity_confidence", "barcode_evidence",
+        "evidence_urls", "warnings", "product_name", "brand",
+        "target_animal", "manufacturer_url", "image_url", "nutritional_info",
+    ],
+    properties={
+        "barcode_verified": types.Schema(type=types.Type.BOOLEAN),
+        "identity_confidence": types.Schema(type=types.Type.STRING),
+        "barcode_evidence": types.Schema(type=types.Type.STRING, nullable=True),
+        "evidence_urls": types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(type=types.Type.STRING),
+        ),
+        "warnings": types.Schema(
+            type=types.Type.ARRAY,
+            items=types.Schema(type=types.Type.STRING),
+        ),
+        "product_name": types.Schema(type=types.Type.STRING, nullable=True),
+        "brand": types.Schema(type=types.Type.STRING, nullable=True),
+        "target_animal": types.Schema(type=types.Type.STRING, nullable=True),
+        "manufacturer_url": types.Schema(type=types.Type.STRING, nullable=True),
+        "image_url": types.Schema(type=types.Type.STRING, nullable=True),
+        "nutritional_info": types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "crude_protein_min": types.Schema(type=types.Type.STRING, nullable=True),
+                "crude_fat_min": types.Schema(type=types.Type.STRING, nullable=True),
+                "crude_fiber_max": types.Schema(type=types.Type.STRING, nullable=True),
+                "moisture_max": types.Schema(type=types.Type.STRING, nullable=True),
+                "ash_max": types.Schema(type=types.Type.STRING, nullable=True),
+                "calories": types.Schema(type=types.Type.STRING, nullable=True),
+                "other": types.Schema(type=types.Type.OBJECT),
+            },
+        ),
+    },
+)
+
+
 # ─── Searcher class ───────────────────────────────────────────────────────────
 
 class ProductSearcher:
@@ -2985,6 +3150,7 @@ class ProductSearcher:
             temperature=0.0,
             max_output_tokens=8192,
             response_mime_type="application/json",
+            response_schema=_EXTRACT_SCHEMA,
         )
 
         log.info(
@@ -3020,15 +3186,30 @@ class ProductSearcher:
         return text, urls, queries
 
     def _extract_product_json(self, barcode: str, facts: str, grounding_urls: list[str]) -> dict:
-        public_urls = _clean_url_list(grounding_urls)
+        raw_facts = facts or ""
+        is_multi_pass = "--- RESCUE SEARCH ---" in raw_facts
+
+        # On multi-pass calls the most recently appended URLs (SerpAPI) carry the
+        # strongest evidence but would be cut off by a first-N limit.  Reversing
+        # ensures _clean_url_list picks the newest-gathered URLs first.
+        urls_for_context = list(reversed(grounding_urls)) if is_multi_pass else grounding_urls
+        public_urls = _clean_url_list(urls_for_context)
+
         url_context = ""
         if public_urls:
-            url_context = "\n\nPublic grounding URLs only:\n" + "\n".join(f"- {u}" for u in public_urls)
+            url_context = (
+                "\n\nSource URLs from the research notes above "
+                "(strongest/most recent evidence last in the notes, first here):\n"
+                + "\n".join(f"- {u}" for u in public_urls)
+            )
+
+        # Inject evidence-priority hint only when multi-pass facts are present.
+        facts_header = _FACTS_PRIORITY_HEADER if is_multi_pass else ""
 
         prompt = _PRODUCT_EXTRACT_PROMPT.format(
             barcode=barcode,
             barcode_variants=_quoted_variants(barcode),
-            facts=(facts or "")[:12000] + url_context,
+            facts=facts_header + raw_facts[-12000:] + url_context,
         )
 
         response = self._gemini_generate(
@@ -3069,12 +3250,8 @@ class ProductSearcher:
                 },
             }
 
-        # Safety normalization: never allow a non-verified product name through.
-        if not data.get("barcode_verified"):
-            data["barcode_verified"] = False
-            data["identity_confidence"] = "low"
-            data["product_name"] = None
-            data["brand"] = None
+        # Enforce business invariants that the prompt instructs but cannot guarantee.
+        data = _normalise_extracted_product(data)
 
         if data.get("identity_confidence") not in {"high", "medium", "low"}:
             data["identity_confidence"] = "low"

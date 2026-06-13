@@ -45,9 +45,22 @@ _RECIPE_FLAVOR_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _WEIGHT_VARIANT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("1.5kg", re.compile(r"\b1\.5\s*kg\b|1\.5公斤|1\.5千克|1-5kg|1\.5kg", re.I)),
     ("2kg", re.compile(r"\b2\s*kg\b|2公斤|2千克", re.I)),
+    ("3.5kg", re.compile(r"\b3\.5\s*kg\b|3\.5公斤|3\.5千克|3-5kg|3\.5kg", re.I)),
     ("4kg", re.compile(r"\b4\s*kg\b|4公斤|4千克", re.I)),
     ("10kg", re.compile(r"\b10\s*kg\b|10公斤|10千克", re.I)),
+)
+
+# Royal Canin / brand line codes that share a barcode family but are different SKUs.
+_PRODUCT_LINE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("in27", re.compile(r"\bin\s*27\b|indoor\s*27|室內\s*27|#in27|\bin27\b", re.I)),
+    ("in7", re.compile(r"\bin\s*7\+?\b|indoor\s*7\+?|indoor\s*7\b|室內\s*7\+?|#in7|\bin7\b", re.I)),
+    ("in_spayed", re.compile(r"spayed|已絕育|sterilis", re.I)),
+)
+
+_LINE_CODE_CONFLICTS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"in27"}), frozenset({"in7"})),
 )
 
 
@@ -143,6 +156,26 @@ def extract_weight_variants(text: str) -> set[str]:
     }
 
 
+def extract_product_line_codes(text: str) -> set[str]:
+    """Return normalized product-line tokens (e.g. Royal Canin IN27 vs IN7+)."""
+    if not text:
+        return set()
+    return {
+        label
+        for label, pattern in _PRODUCT_LINE_RULES
+        if pattern.search(text)
+    }
+
+
+def product_line_codes_compatible(verified: set[str], listing: set[str]) -> bool:
+    if not verified or not listing:
+        return True
+    for left, right in _LINE_CODE_CONFLICTS:
+        if (verified & left and listing & right) or (verified & right and listing & left):
+            return False
+    return True
+
+
 def recipe_flavors_compatible(verified: set[str], listing: set[str]) -> bool:
     if not verified or not listing:
         return True
@@ -187,6 +220,13 @@ def listing_matches_product_variant(
     verified_weights = extract_weight_variants(identity)
     listing_weights = extract_weight_variants(blob)
     if verified_weights and listing_weights and not (verified_weights & listing_weights):
+        return False
+
+    verified_lines = extract_product_line_codes(identity)
+    listing_lines = extract_product_line_codes(blob)
+    if not product_line_codes_compatible(verified_lines, listing_lines):
+        return False
+    if verified_lines and listing_lines and not (verified_lines & listing_lines):
         return False
 
     return True
@@ -473,7 +513,13 @@ def catalog_conflicts_with_verified_identity(
     target_animal: str | None,
 ) -> str | None:
     """
-    After live search verifies identity, reject if trusted catalog unanimously disagrees.
+    After live search verifies identity, reject if trusted catalog unanimously disagrees
+    on brand or target animal.
+
+    Intentionally limited to brand and cross-species animal conflicts only.
+    Product line codes, pack sizes, and recipe variants are retailer-level concerns
+    (Phase 4) — applying them here would cause false downgrades when catalog rows
+    carry slightly different variant names for the same barcode.
     """
     if not trusted:
         return None
@@ -492,11 +538,22 @@ def catalog_conflicts_with_verified_identity(
             f"({cat_brand}) for barcode {barcode}."
         )
 
+    # Only fire on a clear cross-species conflict (Dog ↔ Cat).
+    # Same-species variants (size, line code, flavour) are not identity-level conflicts.
     if target_animal and cat_animal:
-        if not listing_matches_verified_product(canonical, brand, product_name, target_animal):
-            return (
-                f"Live search target animal ({target_animal}) conflicts with "
-                f"trusted catalog ({cat_animal}) for barcode {barcode}."
-            )
+        ta = normalize_match_text(target_animal)
+        ca = normalize_match_text(cat_animal)
+        if ta != ca:
+            ta_has_dog = "dog" in ta
+            ta_has_cat = "cat" in ta
+            ca_has_dog = "dog" in ca
+            ca_has_cat = "cat" in ca
+            if (ta_has_dog and not ca_has_dog and ca_has_cat) or (
+                ta_has_cat and not ca_has_cat and ca_has_dog
+            ):
+                return (
+                    f"Live search target animal ({target_animal}) conflicts with "
+                    f"trusted catalog ({cat_animal}) for barcode {barcode}."
+                )
 
     return None
