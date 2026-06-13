@@ -649,6 +649,36 @@
         "Please confirm the bag size on the retailer's page before buying."
       ],
       "notes": "Demo barcode; live search cached category URLs (collections/categories). Override pins direct PDPs Jun 2026."
+    },
+    {
+      "barcode": "052742703701",
+      "product_name": "Hill's Science Diet Adult Chicken & Barley Entrée Canned Dog Food",
+      "brand": "Hill's Science Diet",
+      "target_animal": "Dog",
+      "image_url": "https://s7d2.scene7.com/is/image/PetSmart/5117271",
+      "barcode_evidence": "UPC 052742703701 maps to Hill's Science Diet Adult Chicken & Barley Entrée canned dog food (13 oz / 370 g).",
+      "identity_confidence": "high",
+      "nutritional_info": {
+        "crude_protein_min": "5.2%",
+        "crude_fat_min": "3.0%",
+        "crude_fiber_max": "1.5%",
+        "moisture_max": "78.0%"
+      },
+      "retailers": [
+        {
+          "source": "override",
+          "seller_name": "PetChill",
+          "url": "https://www.petchillhk.com/en/Hills-%E5%B8%8C%E7%88%BE%E6%80%9D/%E7%8B%97%E7%BD%90%E9%A0%AD-%E7%8B%97%E6%BF%95%E7%B2%AE/34877",
+          "price_hkd": "HK$28.00",
+          "price_value": 28.0,
+          "notes": "12.5oz can — sale price; confirm size on page"
+        }
+      ],
+      "warnings": [
+        "Sold in single cans and multipacks — prices differ.",
+        "Confirm can size (12.5 oz vs 13 oz) on the retailer page before buying."
+      ],
+      "notes": "Live search once returned HK$500 from petchillhk.com (LLM price). Curated Jun 2026."
     }
   ]
 }

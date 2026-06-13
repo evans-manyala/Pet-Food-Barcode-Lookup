@@ -11,6 +11,7 @@ from typing import Literal, Optional
 from src.config import get_settings
 from src.llm_searcher import ProductSearcher, _nutrition_has_guaranteed_analysis
 from src.models import ProductInfo
+from src.pending_cache import flush_pending_cache_writes, persist_product_caches
 from src.pinecone_store import PineconeStore
 from src.redis_cache import RedisCache
 
@@ -56,12 +57,18 @@ def _enrich_cached_product(product: ProductInfo) -> tuple[ProductInfo, bool]:
     return enriched, changed
 
 
+def _sync_caches(product: ProductInfo, redis_cache: RedisCache, pinecone: PineconeStore) -> None:
+    persist_product_caches(product, redis_cache, pinecone)
+
+
 def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
     """
     Lookup pipeline: Redis → Pinecone → Gemini web search.
     Returns a LookupResult with product, source layer, or error message.
     """
     cfg = get_settings()
+    flush_pending_cache_writes()
+
     redis_cache = RedisCache()
     pinecone = PineconeStore()
 
@@ -71,10 +78,7 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
             if is_cache_safe(product):
                 product, enriched = _enrich_cached_product(product)
                 if enriched:
-                    if redis_cache.is_available:
-                        redis_cache.set(product)
-                    if pinecone.is_available:
-                        pinecone.upsert(product)
+                    _sync_caches(product, redis_cache, pinecone)
                 log.info("Cache hit: Redis for %s", barcode)
                 return LookupResult(product=product, source="redis")
             log.warning("Ignoring unsafe Redis entry for %s", barcode)
@@ -86,10 +90,7 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
             if is_cache_safe(product):
                 product, enriched = _enrich_cached_product(product)
                 if enriched:
-                    if redis_cache.is_available:
-                        redis_cache.set(product)
-                    if pinecone.is_available:
-                        pinecone.upsert(product)
+                    _sync_caches(product, redis_cache, pinecone)
                 log.info("Cache hit: Pinecone for %s", barcode)
                 return LookupResult(product=product, source="pinecone")
             log.warning("Ignoring unsafe Pinecone entry for %s", barcode)
@@ -112,13 +113,9 @@ def lookup_barcode(barcode: str, force_refresh: bool = False) -> LookupResult:
             catalog_stats=catalog_stats,
         )
 
-    if redis_cache.is_available:
-        redis_cache.set(product)
-        log.debug("Saved to Redis (TTL: %sh)", cfg.redis_ttl // 3600)
-
-    if pinecone.is_available:
-        pinecone.upsert(product)
-        log.debug("Saved to Pinecone")
+    _sync_caches(product, redis_cache, pinecone)
+    flush_pending_cache_writes()
+    log.debug("Saved to cache layers (TTL: %sh)", cfg.redis_ttl // 3600)
 
     return LookupResult(
         product=product,

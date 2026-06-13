@@ -5,6 +5,7 @@ api/app.py – FastAPI web service for Pet Food Barcode Lookup.
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -16,10 +17,19 @@ from pydantic import BaseModel, Field
 from src.barcode_validator import validate_barcode
 from src.config import get_settings
 from src.observability import LookupEvent, classify_error, metrics
+from src.pending_cache import flush_pending_cache_writes
 from src.serialization import product_to_api_payload
 from src.service import lookup_barcode
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    flush_pending_cache_writes()
+    yield
+    flush_pending_cache_writes()
+
 
 app = FastAPI(
     title="Pet Food Barcode Lookup",
@@ -30,6 +40,7 @@ app = FastAPI(
         "Full docs: [docs/API.md](https://github.com/evans-manyala/Pet-Food-Barcode-Lookup/blob/main/docs/API.md)"
     ),
     version="1.0.0",
+    lifespan=_app_lifespan,
     openapi_tags=[
         {"name": "health", "description": "Liveness and readiness"},
         {"name": "lookup", "description": "Barcode product lookup"},

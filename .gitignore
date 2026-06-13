@@ -22,6 +22,8 @@ data/*.db
 data/*.db-journal
 data/lookup_metrics.jsonl
 data/lookup_metrics.jsonl.tmp
+data/pending_cache_writes.jsonl
+data/pending_cache_writes.jsonl.tmp
 data/imports/**/*.csv
 
 

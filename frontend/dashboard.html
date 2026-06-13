@@ -100,13 +100,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
       <span id="loading-text" style="font-size:12px;color:var(--muted);display:none">Loading…</span>
     </div>
 
-    <div class="sys-grid" id="system" style="grid-template-columns:repeat(6,1fr)">
+    <div class="sys-grid" id="system" style="grid-template-columns:repeat(7,1fr)">
       <div class="sys-item"><div class="label">Redis</div><div class="val" id="sys-redis">—</div></div>
       <div class="sys-item"><div class="label">Pinecone</div><div class="val" id="sys-pinecone">—</div></div>
       <div class="sys-item"><div class="label">HK Catalog</div><div class="val" id="sys-catalog">—</div></div>
       <div class="sys-item"><div class="label">Catalog rows</div><div class="val accent" id="sys-catalog-rows">—</div></div>
       <div class="sys-item"><div class="label">Uptime</div><div class="val accent" id="sys-uptime">—</div></div>
       <div class="sys-item"><div class="label">Events buffered</div><div class="val accent" id="sys-events">—</div></div>
+      <div class="sys-item"><div class="label">Pending sync</div><div class="val accent" id="sys-pending">—</div></div>
     </div>
     <div style="font-size:11px;color:var(--muted);margin:-20px 0 24px 4px" id="sys-catalog-meta">—</div>
 
@@ -206,6 +207,10 @@ function renderSystem(sys,s){
   const h=Math.floor(s.uptime_seconds/3600),m=Math.floor((s.uptime_seconds%3600)/60);
   set('sys-uptime',h?`${h}h ${m}m`:`${m}m`);
   set('sys-events',sys.events_buffered);
+  const pending = sys.pending_cache_writes || 0;
+  const pendingEl = document.getElementById('sys-pending');
+  pendingEl.textContent = pending.toLocaleString();
+  pendingEl.className = 'val ' + (pending > 0 ? 'down' : 'up');
 }
 
 function renderKPIs(s){
