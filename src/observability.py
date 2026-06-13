@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -56,6 +56,8 @@ class LookupEvent:
     catalog_barcode_hits: int = 0
     catalog_retailer_candidates: int = 0
     catalog_trusted_retailers: int = 0
+    passes_used: int = 0
+    grounding_queries: list = field(default_factory=list)
 
     @property
     def ts_iso(self) -> str:
@@ -223,6 +225,12 @@ class MetricsStore:
 
         live_events = [e for e in events if e.source == "live_search" and not e.cache_hit]
 
+        conf_high = sum(1 for e in successes if e.identity_confidence == "high")
+        conf_medium = sum(1 for e in successes if e.identity_confidence == "medium")
+        conf_low = sum(1 for e in events if e.identity_confidence == "low")
+
+        multi_pass = sum(1 for e in live_events if e.passes_used > 1)
+
         summary = {
             "window_hours": int(hours),
             "total": total,
@@ -241,6 +249,10 @@ class MetricsStore:
             "catalog_barcode_hits": sum(e.catalog_barcode_hits for e in live_events),
             "catalog_retailer_candidates": sum(e.catalog_retailer_candidates for e in live_events),
             "catalog_trusted_retailers": sum(e.catalog_trusted_retailers for e in live_events),
+            "confidence_high": conf_high,
+            "confidence_medium": conf_medium,
+            "confidence_low": conf_low,
+            "multi_pass_lookups": multi_pass,
         }
 
         return {
@@ -368,6 +380,10 @@ class MetricsStore:
             "unverified": e.unverified,
             "force_refresh": e.force_refresh,
             "catalog_trusted_retailers": e.catalog_trusted_retailers,
+            "identity_confidence": e.identity_confidence,
+            "passes_used": e.passes_used,
+            "grounding_queries": list(e.grounding_queries or []),
+            "warning_count": e.warning_count,
         }
 
     def _system_status(self) -> dict:

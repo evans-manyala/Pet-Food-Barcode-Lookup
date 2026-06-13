@@ -18,6 +18,8 @@ class LookupTimer:
     catalog_ms: int = 0
     url_validation_ms: int = 0
     wall_ms: int = 0
+    passes_used: int = 0
+    grounding_queries: list = field(default_factory=list)
 
     @contextmanager
     def measure(self, bucket: str) -> Iterator[None]:
@@ -54,7 +56,7 @@ class LookupTimer:
         )
         return self.wall_ms or measured
 
-    def to_dict(self) -> dict[str, int | float]:
+    def to_dict(self) -> dict:
         total = max(self.total_ms, 1)
         return {
             "gemini_ms": self.gemini_ms,
@@ -67,6 +69,8 @@ class LookupTimer:
             "serpapi_pct": round(self.serpapi_ms / total * 100, 1),
             "catalog_pct": round(self.catalog_ms / total * 100, 1),
             "url_validation_pct": round(self.url_validation_ms / total * 100, 1),
+            "passes_used": self.passes_used,
+            "grounding_queries": list(self.grounding_queries),
         }
 
 
