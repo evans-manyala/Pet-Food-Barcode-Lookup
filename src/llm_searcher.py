@@ -3354,12 +3354,23 @@ class ProductSearcher:
                 )
                 return catalog_result.data, catalog_result.facts
 
-        facts_1, urls_1, _ = self._grounded_search(
+        # Helper: record pass metadata on the active timer so the dashboard can
+        # show exactly how many passes were needed and what Gemini searched for.
+        def _record_pass(pass_num: int, queries: list[str]) -> None:
+            t = get_lookup_timer()
+            if t:
+                t.passes_used = pass_num
+                for q in queries:
+                    if q not in t.grounding_queries:
+                        t.grounding_queries.append(q)
+
+        facts_1, urls_1, queries_1 = self._grounded_search(
             _PRODUCT_SEARCH_PROMPT.format(
                 barcode=barcode,
                 barcode_variants=_quoted_variants(barcode),
             )
         )
+        _record_pass(1, queries_1)
         data = self._extract_product_json(barcode, facts_1, urls_1)
         data = self._cross_check_catalog_identity(barcode, data)
         if self._is_verified(data):
@@ -3396,7 +3407,8 @@ class ProductSearcher:
             + "\n".join(rescue_queries)
         )
 
-        facts_2, urls_2, _ = self._grounded_search(rescue_prompt)
+        facts_2, urls_2, queries_2 = self._grounded_search(rescue_prompt)
+        _record_pass(2, queries_2)
         merged_facts = facts_1 + "\n\n--- RESCUE SEARCH ---\n\n" + facts_2
         merged_urls = list(dict.fromkeys(urls_1 + urls_2))
         data = self._extract_product_json(barcode, merged_facts, merged_urls)
@@ -3427,6 +3439,7 @@ class ProductSearcher:
             merged_urls = list(dict.fromkeys(merged_urls + ai_urls))
             data = self._extract_product_json(barcode, merged_facts, merged_urls)
             data = self._cross_check_catalog_identity(barcode, data)
+            _record_pass(3, [f"SerpAPI AI Mode search_id={search_id or 'n/a'}"])
 
         if not self._is_verified(data):
             log.warning(
@@ -3452,6 +3465,7 @@ class ProductSearcher:
                 merged_urls = list(dict.fromkeys(merged_urls + search_urls))
                 data = self._extract_product_json(barcode, merged_facts, merged_urls)
                 data = self._cross_check_catalog_identity(barcode, data)
+                _record_pass(4, [f"SerpAPI barcode search search_ids={search_ids or 'n/a'}"])
 
         if not self._is_verified(data):
             log.info(
