@@ -49,13 +49,26 @@ echo "==> Stopping existing containers (frees ports when switching layouts)..."
 docker compose "${COMPOSE_FILES[@]}" down --remove-orphans
 
 echo "==> Rebuilding and restarting containers..."
-docker compose "${COMPOSE_FILES[@]}" up -d --build
+docker compose "${COMPOSE_FILES[@]}" up -d --build --wait
 
 echo "==> Pruning old images..."
 docker image prune -f
 
 echo "==> Health check..."
-sleep 3
-curl -fsS http://127.0.0.1:8000/api/health || curl -fsS "http://127.0.0.1:${APP_PORT:-80}/api/health"
+HEALTH_URL="http://127.0.0.1:8000/api/health"
+MAX_ATTEMPTS=30
+attempt=1
+until curl -fsS "$HEALTH_URL" >/dev/null 2>&1; do
+  if [[ "$attempt" -ge "$MAX_ATTEMPTS" ]]; then
+    echo "ERROR: App did not respond on $HEALTH_URL after $((MAX_ATTEMPTS * 2))s"
+    docker compose "${COMPOSE_FILES[@]}" ps
+    docker compose "${COMPOSE_FILES[@]}" logs --tail=80 app
+    exit 1
+  fi
+  echo "Waiting for app on :8000... ($attempt/$MAX_ATTEMPTS)"
+  sleep 2
+  attempt=$((attempt + 1))
+done
+curl -fsS "$HEALTH_URL"
 echo ""
 echo "Deploy OK at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
